@@ -1,0 +1,5 @@
+data/
+my_dataset/
+.dvc/cache/
+.dvc/tmp/
+.dvc/local/
