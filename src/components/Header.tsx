@@ -6,7 +6,7 @@ export function Header() {
     <View className="flex-row justify-between items-center px-margin-mobile py-4 bg-background border-b border-outline-variant/10">
       <View>
         <Text className="text-xs font-bold tracking-widest text-primary uppercase">NutriVision</Text>
-        <Text className="font-headline-sm text-xl font-bold text-on-surface">Bonjour ! 👋</Text>
+        <Text className="text-xl font-bold text-on-surface">Bonjour ! 👋</Text>
       </View>
       
       {/* Photo de Profil / Avatar */}

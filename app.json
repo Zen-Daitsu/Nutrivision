@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "NutriVision",
+    "slug": "nutrivision-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "nutrivision",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-router"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "NutriVision utilise la caméra pour analyser vos repas.",
+        "NSPhotoLibraryUsageDescription": "NutriVision accède à vos photos pour analyser une image de repas."
+      }
+    },
+    "android": {
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES"
+      ]
+    },
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

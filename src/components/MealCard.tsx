@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Image, StyleSheet } from 'react-native';
+import { View, Text, Image } from 'react-native';
 
 interface MealCardProps {
   title: string;
@@ -25,7 +25,7 @@ export function MealCard({ title, calories, period, time, tags, imageUri }: Meal
       <View className="w-2/3 p-sm justify-between">
         <View>
           <View className="flex-row justify-between items-start">
-            <Text className="font-headline-sm text-headline-sm text-on-surface flex-1 mr-2" numberOfLines={1}>
+            <Text className="text-headline-sm text-on-surface flex-1 mr-2" numberOfLines={1}>
               {title}
             </Text>
             <Text className="text-primary font-bold text-label-md">{calories} kcal</Text>

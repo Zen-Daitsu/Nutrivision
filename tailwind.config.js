@@ -12,6 +12,8 @@ module.exports = {
         background: '#f8f9ff',
         surface: '#f8f9ff',
         'surface-container-lowest': '#ffffff',
+        'surface-container-low': '#f1f5f9',
+        'surface-container': '#e8eef7',
         'surface-container-high': '#dce9ff',
         primary: '#006c49',
         'primary-container': '#10b981',
@@ -22,6 +24,8 @@ module.exports = {
         'on-surface-variant': '#3c4a42',
         'outline-variant': '#bbcabf',
         tertiary: '#5d5f5f',
+        error: '#ba1a1a',
+        'error-container': '#ffdad6',
       },
       spacing: {
         'base': 4,
@@ -41,6 +45,10 @@ module.exports = {
         'lg': 16,
         'xl': 24,
         'full': 9999,
+      },
+      fontSize: {
+        'headline-sm': [20, { lineHeight: 28 }],
+        'label-md': [14, { lineHeight: 20 }],
       },
     },
   },

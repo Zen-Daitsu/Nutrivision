@@ -1,6 +1,6 @@
-import "../../global.css"; // CORRECTION : Requis pour injecter Tailwind dans Expo Router
+import "../../global.css";
 import { Tabs } from 'expo-router';
-import { MaterialSymbols } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 import { DesignTokens } from '../theme/design-tokens';
 
 export default function AppLayout() {
@@ -21,28 +21,28 @@ export default function AppLayout() {
         options={{ 
           title: "Journal",
           headerShown: false,
-          tabBarIcon: ({ color }) => <MaterialSymbols name="restaurant_menu" size={24} color={color} />
+          tabBarIcon: ({ color }) => <MaterialIcons name="restaurant-menu" size={24} color={color} />
         }} 
       />
       <Tabs.Screen 
         name="analyze" 
         options={{ 
           title: "Analyser",
-          tabBarIcon: ({ color }) => <MaterialSymbols name="photo_camera" size={24} color={color} />
+          tabBarIcon: ({ color }) => <MaterialIcons name="photo-camera" size={24} color={color} />
         }} 
       />
       <Tabs.Screen 
         name="recipes" 
         options={{ 
           title: "Recettes",
-          tabBarIcon: ({ color }) => <MaterialSymbols name="auto_awesome" size={24} color={color} />
+          tabBarIcon: ({ color }) => <MaterialIcons name="auto-awesome" size={24} color={color} />
         }} 
       />
       <Tabs.Screen 
         name="profile" 
         options={{ 
           title: "Profil",
-          tabBarIcon: ({ color }) => <MaterialSymbols name="person" size={24} color={color} />
+          tabBarIcon: ({ color }) => <MaterialIcons name="person" size={24} color={color} />
         }} 
       />
     </Tabs>

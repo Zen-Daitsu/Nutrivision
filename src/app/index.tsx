@@ -21,9 +21,9 @@ export default function Dashboard() {
 
         {/* CORRECTION : Remplacement du <div> par un <View> natif */}
         <View className="flex-row justify-between items-center mt-lg mb-sm">
-          <Text className="font-headline-sm text-headline-sm text-on-surface">Dernières Analyses</Text>
+          <Text className="text-headline-sm font-bold text-on-surface">Dernières Analyses</Text>
           <TouchableOpacity>
-            <Text className="text-primary font-label-md text-label-md">Voir tout</Text>
+            <Text className="text-primary font-semibold text-label-md">Voir tout</Text>
           </TouchableOpacity>
         </View>
 

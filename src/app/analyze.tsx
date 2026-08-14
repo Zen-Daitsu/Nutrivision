@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, Image, TouchableOpacity, SafeAreaView } from 'react-native';
-import { MaterialSymbols } from '@expo/vector-icons'; 
+import { View, Text, Image, TouchableOpacity } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { MaterialIcons } from '@expo/vector-icons';
 
 export default function AnalyzeScreen() {
   const [isScanning, setIsScanning] = useState(true);
@@ -22,11 +23,11 @@ export default function AnalyzeScreen() {
         {/* Header de la Caméra */}
         <View className="flex-row justify-between items-center px-margin-mobile py-4 bg-black/40 backdrop-blur-md">
           <TouchableOpacity className="p-2 rounded-full bg-black/20">
-            <MaterialSymbols name="close" size={24} color="#ffffff" />
+            <MaterialIcons name="close" size={24} color="#ffffff" />
           </TouchableOpacity>
           <Text className="text-white font-semibold tracking-wider text-base">ANALYSE IA</Text>
           <TouchableOpacity className="p-2 rounded-full bg-black/20">
-            <MaterialSymbols name="flash_on" size={24} color="#ffffff" />
+            <MaterialIcons name="flash-on" size={24} color="#ffffff" />
           </TouchableOpacity>
         </View>
 
@@ -44,7 +45,7 @@ export default function AnalyzeScreen() {
               <View className="absolute w-full h-1 bg-primary/80 shadow-lg shadow-primary top-1/2" />
             )}
             
-            <Text className="text-white/64 font-medium text-xs bg-black/50 px-3 py-1 rounded-full text-center">
+            <Text className="text-white/60 font-medium text-xs bg-black/50 px-3 py-1 rounded-full text-center">
               Placer le repas au centre
             </Text>
           </View>
@@ -54,7 +55,7 @@ export default function AnalyzeScreen() {
         <View className="bg-black/60 backdrop-blur-lg px-margin-mobile py-6 flex-row justify-around items-center">
           {/* Galerie */}
           <TouchableOpacity className="items-center justify-center w-12 h-12 rounded-full bg-white/10">
-            <MaterialSymbols name="image" size={24} color="#ffffff" />
+            <MaterialIcons name="image" size={24} color="#ffffff" />
           </TouchableOpacity>
 
           {/* Bouton de capture principal */}
@@ -63,13 +64,13 @@ export default function AnalyzeScreen() {
             onPress={() => setIsScanning(!isScanning)}
           >
             <View className="w-16 h-16 rounded-full bg-primary items-center justify-center">
-              <MaterialSymbols name="photo_camera" size={32} color="#ffffff" />
+              <MaterialIcons name="photo-camera" size={32} color="#ffffff" />
             </View>
           </TouchableOpacity>
 
           {/* Saisie manuelle */}
           <TouchableOpacity className="items-center justify-center w-12 h-12 rounded-full bg-white/10">
-            <MaterialSymbols name="edit" size={24} color="#ffffff" />
+            <MaterialIcons name="edit" size={24} color="#ffffff" />
           </TouchableOpacity>
         </View>
 
