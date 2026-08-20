@@ -7,7 +7,22 @@
     "scheme": "nutrivision",
     "userInterfaceStyle": "automatic",
     "plugins": [
-      "expo-router"
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "NutriVision utilise la caméra pour photographier vos repas.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "NutriVision accède à vos photos pour analyser une image de repas.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
     ],
     "ios": {
       "supportsTablet": true,
@@ -15,12 +30,6 @@
         "NSCameraUsageDescription": "NutriVision utilise la caméra pour analyser vos repas.",
         "NSPhotoLibraryUsageDescription": "NutriVision accède à vos photos pour analyser une image de repas."
       }
-    },
-    "android": {
-      "permissions": [
-        "CAMERA",
-        "READ_MEDIA_IMAGES"
-      ]
     },
     "experiments": {
       "typedRoutes": true
