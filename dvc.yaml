@@ -1,0 +1,39 @@
+stages:
+  compile:
+    cmd: python ml/compile_dataset.py --src data/FoodSeg103 --dst my_dataset
+    deps:
+      - ml/compile_dataset.py
+      - ml/class_map.yaml
+      - data/FoodSeg103
+    outs:
+      - my_dataset
+    metrics:
+      - my_dataset/compile_report.json:
+          cache: false
+
+  validate:
+    cmd: python ml/validate_dataset.py --dataset my_dataset
+    deps:
+      - ml/validate_dataset.py
+      - my_dataset
+    always_changed: false
+
+  train:
+    cmd: python ml/train.py --data my_dataset/data.yaml --epochs 120
+    deps:
+      - ml/train.py
+      - my_dataset
+    outs:
+      - runs/nutrivision/weights/best.pt
+    metrics:
+      - runs/metrics.json:
+          cache: false
+
+  export:
+    cmd: python ml/export_model.py --weights runs/nutrivision/weights/best.pt --out backend/models/yolov8s-seg.onnx
+    deps:
+      - ml/export_model.py
+      - runs/nutrivision/weights/best.pt
+    outs:
+      - backend/models/yolov8s-seg.onnx
+      - backend/models/yolov8s-seg.classes.json

@@ -1,0 +1,5 @@
+{
+  "0": {"name": "chicken_breast", "protein": 0.31, "carbs": 0.00, "fat": 0.036, "calories": 1.65, "density_g_cm3": 1.04},
+  "1": {"name": "white_rice", "protein": 0.027, "carbs": 0.28, "fat": 0.003, "calories": 1.30, "density_g_cm3": 0.72},
+  "2": {"name": "broccoli", "protein": 0.028, "carbs": 0.07, "fat": 0.004, "calories": 0.34, "density_g_cm3": 0.37}
+}

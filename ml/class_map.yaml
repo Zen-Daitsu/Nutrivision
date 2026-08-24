@@ -1,0 +1,27 @@
+# FoodSeg103 category id -> NutriVision class id.
+# Source ids come from FoodSeg103's category_id.txt (0 = background, 1..103 = ingredients).
+# Any FoodSeg id not listed here is dropped from the compiled dataset: training on
+# 103 classes with ~7k images produces a model that is confidently wrong on all of them.
+target_classes:
+  0: chicken_breast
+  1: beef
+  2: egg
+  3: white_rice
+  4: quinoa
+  5: broccoli
+  6: spinach
+  7: tomato
+  8: avocado
+  9: blueberry
+
+source_to_target:
+  76: 0    # chicken duck
+  74: 1    # beef steak
+  72: 2    # egg
+  53: 3    # rice
+  56: 4    # other grain / quinoa proxy — verify against category_id.txt before training
+  33: 5    # broccoli
+  35: 6    # spinach
+  46: 7    # tomato
+  22: 8    # avocado
+  10: 9    # blueberry
