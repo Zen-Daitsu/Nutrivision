@@ -1,0 +1,81 @@
+name: deploy-lightsail
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["backend/**", ".github/workflows/deploy-lightsail.yml"]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ca-central-1
+  ECR_REPOSITORY: nutrivision-api
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-lightsail-${{ github.run_id }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.bootstrap
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Roll the Lightsail container service
+        if: vars.LIGHTSAIL_SERVICE != ''
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          SERVICE: ${{ vars.LIGHTSAIL_SERVICE }}
+          ORIGINS: ${{ vars.FRONTEND_ORIGIN }}
+          USDA_KEY: ${{ secrets.USDA_API_KEY }}
+        run: |
+          aws lightsail create-container-service-deployment \
+            --service-name "$SERVICE" \
+            --containers "{
+              \"api\": {
+                \"image\": \"$IMAGE\",
+                \"ports\": {\"8000\": \"HTTP\"},
+                \"environment\": {
+                  \"NV_ALLOWED_ORIGINS\": \"$ORIGINS\",
+                  \"NV_USDA_API_KEY\": \"$USDA_KEY\"
+                }
+              }
+            }" \
+            --public-endpoint "{
+              \"containerName\": \"api\",
+              \"containerPort\": 8000,
+              \"healthCheck\": {\"path\": \"/healthz\", \"successCodes\": \"200\"}
+            }"
+
+      - name: Wait for the deployment to go ACTIVE
+        if: vars.LIGHTSAIL_SERVICE != ''
+        run: |
+          for i in $(seq 1 40); do
+            STATE=$(aws lightsail get-container-services --service-name ${{ vars.LIGHTSAIL_SERVICE }} \
+                    --query 'containerServices[0].currentDeployment.state' --output text)
+            echo "deployment state: $STATE"
+            [ "$STATE" = "ACTIVE" ] && exit 0
+            [ "$STATE" = "FAILED" ] && exit 1
+            sleep 15
+          done
+          exit 1
