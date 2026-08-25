@@ -2,59 +2,59 @@
 
 **[English](README.md) · [Français](README.fr.md)**
 
-Pointez la caméra d'un téléphone vers une assiette. Obtenez protéines, glucides, lipides et calories.
+Point a phone camera at a plate. Get protein, carbohydrates, fat and calories.
 
-Une application web progressive adossée à un modèle de segmentation YOLOv8 servi par ONNX Runtime, déployée sur AWS via une chaîne GitHub Actions sans aucune clé d'accès permanente.
+A Progressive Web App backed by a YOLOv8 segmentation model served over ONNX Runtime, deployed on AWS through a GitHub Actions pipeline with no long-lived credentials.
 
 | | |
 |---|---|
-| **Démo en ligne** | `https://main.d2dz9pix11gtly.amplifyapp.com` |
-| **Santé de l'API** | `https://<service>.ca-central-1.cs.amazonlightsail.com/healthz` |
-| **Région** | `ca-central-1` — Montréal |
-| **Cours** | A61 · Collège Bois de Boulogne |
-| **Auteurs** | Ismail Boufaress · Mohamed El Amine Kraiem · Cédric Ribassin |
+| **Live demo** | `https://main.d2dz9pix11gtly.amplifyapp.com` |
+| **API health** | `https://<service>.ca-central-1.cs.amazonlightsail.com/healthz` |
+| **Region** | `ca-central-1` — Montréal |
+| **Course** | A61 · Collège Bois de Boulogne |
+| **Authors** | Ismail Boufaress · Mohamed El Amine Kraiem · Cédric Ribassin |
 
 ---
 
-## 1. Pourquoi le CI/CD ne suffit pas à un système d'IA
+## 1. Why CI/CD is not enough for an ML system
 
-Le CI/CD classique repose sur une hypothèse unique : **l'artefact est une fonction pure du code.** Même commit, même binaire. Tester le code revient à tester l'artefact.
+Classical CI/CD rests on one assumption: **the artifact is a pure function of the code.** Same commit, same binary. Test the code, and you have tested the artifact.
 
-Cette hypothèse tombe en apprentissage automatique. L'artefact déployé dépend de trois entrées :
+That assumption breaks in machine learning. The deployed artifact is a function of three inputs:
 
 ```
-modèle = f(code, données, hyperparamètres)
+model = f(code, data, hyperparameters)
 ```
 
-Une chaîne qui ne versionne que la première des trois est incapable de reproduire sa propre sortie. C'est la raison d'être du troisième pilier de la démarche MLOps — **le CT, ou entraînement continu** — aux côtés du CI et du CD.
+A pipeline that versions only the first of the three cannot reproduce its own output. This is why MLOps adds a third leg — **CT, Continuous Training** — alongside CI and CD.
 
-| Pilier | Question à laquelle il répond | Déclencheur | Artefact produit |
+| Leg | Question it answers | Trigger | Artifact produced |
 |---|---|---|---|
-| **CI** — Intégration continue | Le code est-il correct et les données respectent-elles leur contrat ? | chaque poussée, chaque demande de tirage | rapport de tests |
-| **CD** — Livraison continue | Ce commit précis peut-il atteindre la production sans risque ? | fusion dans `main` | image conteneur, service déployé |
-| **CT** — Entraînement continu | Le modèle tient-il encore lorsque les données changent ? | nouvelles données, changement de schéma, dérive | poids du modèle, graphe ONNX |
+| **CI** — Continuous Integration | Is the code correct and does the data satisfy its contract? | every push, every pull request | test report |
+| **CD** — Continuous Delivery | Can this exact commit reach production safely? | merge to `main` | container image, deployed service |
+| **CT** — Continuous Training | Does the model still hold when the data changes? | new data, schema change, drift | model weights, ONNX graph |
 
-Le cadrage suit les travaux SE4AI de Carnegie Mellon : un système d'IA dépourvu de chaîne reproductible n'est pas seulement non testé, il constitue une dette technique qui s'accumule à chaque réentraînement.
+The framing follows the SE4AI body of work from Carnegie Mellon: an AI system without a reproducible pipeline is not merely untested — it is technical debt that compounds with every retraining run.
 
 ---
 
-## 2. Architecture du système
+## 2. System architecture
 
 ```mermaid
 flowchart TB
     subgraph client["Client"]
-        phone["Navigateur mobile<br/>getUserMedia + canvas"]
+        phone["Phone browser<br/>getUserMedia + canvas"]
     end
 
     subgraph edge["AWS Amplify Hosting"]
-        pwa["PWA statique<br/>HTML · CSS · JS natif<br/>service worker + manifeste"]
+        pwa["Static PWA<br/>HTML · CSS · Vanilla JS<br/>service worker + manifest"]
     end
 
     subgraph compute["AWS Lightsail Containers · ca-central-1"]
-        api["Orchestrateur FastAPI<br/>uvicorn"]
+        api["FastAPI orchestrator<br/>uvicorn"]
         ort["ONNX Runtime<br/>yolov8n-seg"]
-        post["Post-traitement<br/>décodage + NMS + masques"]
-        mass["Estimation de masse<br/>aire vers grammes"]
+        post["Postprocess<br/>decode + NMS + mask"]
+        mass["Mass estimation<br/>area to grams"]
     end
 
     subgraph registry["Amazon ECR"]
@@ -62,47 +62,47 @@ flowchart TB
     end
 
     subgraph data["Amazon S3"]
-        dvc["Dépôt distant DVC<br/>jeu de données + poids"]
+        dvc["DVC remote<br/>dataset + weights"]
     end
 
-    ext["API USDA FoodData Central"]
+    ext["USDA FoodData Central API"]
 
-    phone -->|"HTTPS · JPEG multipart"| pwa
+    phone -->|"HTTPS · multipart JPEG"| pwa
     pwa -->|"fetch POST /api/v1/analyze"| api
     api --> ort --> post --> mass
-    mass -->|"nom de classe"| ext
-    ext -->|"macros pour 100 g"| api
-    api -->|"table JSON des macros"| pwa
-    img -.->|"tirage de l'image"| compute
-    dvc -.->|"artefact modèle"| img
+    mass -->|"class name"| ext
+    ext -->|"macros per 100 g"| api
+    api -->|"JSON macro table"| pwa
+    img -.->|"image pull"| compute
+    dvc -.->|"model artifact"| img
 ```
 
-Chaque saut est en HTTPS. L'API caméra refuse de s'exécuter hors contexte sécurisé : le TLS est donc une exigence fonctionnelle et non une mesure de durcissement. Amplify et Lightsail terminent tous deux le TLS sur des domaines appartenant à AWS, ce qui évite l'achat et la validation d'un certificat.
+Every hop is HTTPS. The camera API refuses to run outside a secure context, so TLS is a functional requirement rather than a hardening step. Amplify and Lightsail both terminate TLS on AWS-owned domains, which removes the need to purchase and validate a certificate.
 
 ---
 
-## 3. Les trois chaînes
+## 3. The three pipelines
 
 ```mermaid
 flowchart LR
-    subgraph CI["CI · chaque poussée"]
+    subgraph CI["CI · every push"]
         lint["ruff"]
-        unit["pytest<br/>parité post-traitement<br/>estimation de masse"]
-        contract["contrat de données<br/>schéma de réponse"]
+        unit["pytest<br/>postprocess parity<br/>mass estimation"]
+        contract["data contract<br/>response schema"]
     end
 
-    subgraph CT["CT · quand les données changent"]
-        compile["compile_dataset.py<br/>masques vers polygones YOLO"]
-        validate["validate_dataset.py<br/>orphelins · bornes · famine"]
-        train["train.py<br/>affinage yolov8s-seg"]
-        export["export_model.py<br/>ONNX + assertion de parité"]
+    subgraph CT["CT · when data changes"]
+        compile["compile_dataset.py<br/>masks to YOLO polygons"]
+        validate["validate_dataset.py<br/>orphans · ranges · starvation"]
+        train["train.py<br/>yolov8s-seg fine-tune"]
+        export["export_model.py<br/>ONNX + parity assertion"]
     end
 
-    subgraph CD["CD · fusion dans main"]
-        build["docker build<br/>multi-étapes"]
-        push["poussée vers ECR"]
-        deploy["déploiement Lightsail"]
-        health["contrôle /healthz"]
+    subgraph CD["CD · merge to main"]
+        build["docker build<br/>multi-stage"]
+        push["push to ECR"]
+        deploy["Lightsail deployment"]
+        health["/healthz gate"]
     end
 
     lint --> unit --> contract
@@ -112,16 +112,16 @@ flowchart LR
     build --> push --> deploy --> health
 ```
 
-### CI — ce qui s'exécute à chaque poussée
+### CI — what runs on every push
 
 `.github/workflows/ci.yml`
 
-- **Analyse statique** — `ruff check app tests`
-- **Oracle de correction** — `tests/test_postprocess.py` construit un tenseur de sortie YOLO synthétique comportant deux boîtes superposées de même classe et une boîte distincte, puis vérifie que le NMS supprime exactement le doublon. C'est l'implémentation de référence avec laquelle tout noyau accéléré doit concorder.
-- **Contrat de données** — `tests/test_contract.py` gèle le schéma de réponse JSON. La PWA se lie à `items[].macros.protein` et consorts ; si une refonte du backend renomme un champ, la compilation échoue avant que le frontal n'affiche silencieusement `—`.
-- **Intégrité du service worker** — un script vérifie que chaque chemin préchargé dans `sw.js` existe réellement dans `frontend/`. Une entrée manquante fait échouer `addAll()` et l'application ne s'installe plus.
+- **Lint** — `ruff check app tests`
+- **Correctness oracle** — `tests/test_postprocess.py` builds a synthetic YOLO output tensor with two overlapping boxes of the same class and one distinct box, then asserts NMS suppresses exactly the duplicate. This is the reference implementation against which any accelerated kernel must agree.
+- **Data contract** — `tests/test_contract.py` freezes the JSON response schema. The PWA binds to `items[].macros.protein` and friends; if a backend refactor renames a field, the build fails before the frontend silently displays `—`.
+- **Service worker integrity** — a script checks that every path precached in `sw.js` actually exists in `frontend/`. A missing entry makes `addAll()` reject and the app fails to install.
 
-### CD — ce qui s'exécute à la fusion dans `main`
+### CD — what runs on merge to `main`
 
 `.github/workflows/deploy-lightsail.yml`
 
@@ -132,82 +132,82 @@ sequenceDiagram
     participant ECR as Amazon ECR
     participant LS as Lightsail
 
-    GH->>STS: AssumeRoleWithWebIdentity<br/>jeton OIDC
-    Note over STS: sub doit valoir<br/>repo:OWNER/REPO:ref:refs/heads/main
-    STS-->>GH: identifiants temporaires · 1 h
+    GH->>STS: AssumeRoleWithWebIdentity<br/>OIDC token
+    Note over STS: sub must equal<br/>repo:OWNER/REPO:ref:refs/heads/main
+    STS-->>GH: temporary credentials · 1 h
     GH->>GH: docker build --file backend/Dockerfile
-    GH->>ECR: poussée nutrivision-api:$GITHUB_SHA
+    GH->>ECR: push nutrivision-api:$GITHUB_SHA
     GH->>LS: CreateContainerServiceDeployment
-    LS->>ECR: tirage via le rôle image-puller
-    LS->>LS: contrôle de santé GET /healthz
-    LS-->>GH: état du déploiement ACTIVE
+    LS->>ECR: pull image via image-puller role
+    LS->>LS: health check GET /healthz
+    LS-->>GH: deployment state ACTIVE
 ```
 
-**Aucune clé d'accès AWS n'existe dans ce dépôt ni dans les secrets GitHub.** L'authentification passe par OpenID Connect : GitHub émet un jeton d'identité de courte durée, AWS STS l'échange contre des identifiants valides une heure, et la politique de confiance restreint cet échange à un seul dépôt et une seule branche.
+**No AWS access key exists anywhere in this repository or in GitHub secrets.** Authentication uses OpenID Connect: GitHub issues a short-lived identity token, AWS STS exchanges it for credentials valid for one hour, and the trust policy restricts the exchange to a single repository and a single branch.
 
 ```json
 "token.actions.githubusercontent.com:sub":
   "repo:Zen-Daitsu/Nutrivision:ref:refs/heads/main"
 ```
 
-Le frontal se déploie indépendamment. Amplify surveille `main`, lit `amplify.yml`, injecte le point d'entrée de l'API dans `frontend/js/config.js` au moment de la compilation, et applique les en-têtes de cache — un an pour les ressources versionnées par empreinte, `no-cache` pour `index.html`, `sw.js` et `config.js`, afin qu'une PWA installée ne puisse jamais exécuter le paquet de la semaine dernière contre l'API de cette semaine.
+The frontend deploys independently. Amplify watches `main`, reads `amplify.yml`, injects the API endpoint into `frontend/js/config.js` at build time, and applies cache headers — one year for hashed assets, `no-cache` for `index.html`, `sw.js` and `config.js`, so an installed PWA can never run last week's bundle against this week's API.
 
-### CT — ce qui s'exécute quand les données changent
+### CT — what runs when the data changes
 
-`dvc.yaml` décrit la chaîne d'entraînement sous forme de graphe acyclique orienté. `dvc repro` ne réexécute que les étapes dont les dépendances ont changé.
+`dvc.yaml` defines the training pipeline as a directed acyclic graph. `dvc repro` re-executes only the stages whose dependencies changed.
 
 ```mermaid
 flowchart LR
-    raw["FoodSeg103<br/>masques bruts"] --> compile
-    map["ml/class_map.yaml<br/>id source vers id de classe"] --> compile
-    compile["compile"] --> ds["my_dataset/<br/>polygones YOLO"]
-    ds --> validate["validate<br/>barrière de contrat"]
+    raw["FoodSeg103<br/>raw masks"] --> compile
+    map["ml/class_map.yaml<br/>source id to class id"] --> compile
+    compile["compile"] --> ds["my_dataset/<br/>YOLO polygons"]
+    ds --> validate["validate<br/>contract gate"]
     validate --> train["train"]
     train --> best["best.pt"]
     best --> export["export"]
     export --> onnx["yolov8n-seg.onnx<br/>+ classes.json"]
     onnx --> s3["S3 via DVC"]
-    s3 --> cd["chaîne CD"]
+    s3 --> cd["CD pipeline"]
 ```
 
-Quatre propriétés rendent cette chaîne reproductible et pas seulement automatisée :
+Four properties make this reproducible rather than merely automated:
 
-**Partition déterministe.** La première implémentation répartissait les images avec `hash()` de Python, dont la graine varie d'un processus à l'autre. Chaque réexécution rebrassait entraînement et validation, provoquant une fuite de données entre versions DVC. La partition dérive désormais de `sha1(nom_de_base)`, stable entre processus, machines et compilations de Python.
+**Deterministic splits.** The first implementation routed images with Python's `hash()`, which is salted per process. Every rerun reshuffled train and validation, leaking data across DVC versions. The split now derives from `sha1(basename)`, stable across processes, machines and Python builds.
 
-**Correspondance de classes explicite.** FoodSeg103 comporte 104 catégories. `ml/class_map.yaml` fait correspondre un sous-ensemble choisi aux identifiants de classe du projet ; les identifiants source non répertoriés sont écartés plutôt que fusionnés en silence.
+**Explicit class mapping.** FoodSeg103 ships 104 categories. `ml/class_map.yaml` maps a chosen subset to project class ids; unmapped source ids are dropped rather than silently collapsed.
 
-**Une barrière de contrat qui échoue bruyamment.** `validate_dataset.py` retourne un code non nul en cas d'images ou d'étiquettes orphelines, d'identifiants de classe hors bornes, de coordonnées non normalisées, de polygones malformés, ou de famine de classe sous cinquante instances. Une classe affamée produit un modèle qui se trompe avec assurance.
+**A contract gate that fails loudly.** `validate_dataset.py` returns non-zero on image/label orphans, out-of-range class ids, denormalised coordinates, malformed polygons, and class starvation below fifty instances. A starved class trains a model that is confidently wrong.
 
-**Une barrière de validation du modèle.** `export_model.py` exécute le graphe PyTorch et le graphe ONNX exporté sur le même tenseur et vérifie que l'écart absolu maximal reste sous `1e-3`. Un export qui se charge n'est pas un export qui est correct.
+**A model validation gate.** `export_model.py` runs the PyTorch graph and the exported ONNX graph on the same tensor and asserts a maximum absolute difference below `1e-3`. An export that loads is not an export that is correct.
 
 ---
 
-## 4. Cycle de vie d'une requête
+## 4. Request lifecycle
 
 ```mermaid
 sequenceDiagram
-    actor Utilisateur
+    actor User
     participant PWA
     participant API as FastAPI
     participant ORT as ONNX Runtime
     participant USDA as FoodData Central
 
-    Utilisateur->>PWA: appui sur « Scanner l'assiette »
-    PWA->>PWA: capture canvas · réduction à 1280 px · JPEG q85
+    User->>PWA: tap "Scan plate"
+    PWA->>PWA: canvas capture · downscale to 1280 px · JPEG q85
     PWA->>API: POST /api/v1/analyze · multipart
-    API->>API: validation MIME · plafond de 8 Mo · décodage
-    API->>API: letterbox 640x640 · BGR vers RGB · CHW · normalisation
+    API->>API: validate MIME · enforce 8 MB cap · decode
+    API->>API: letterbox to 640x640 · BGR to RGB · CHW · normalise
     API->>ORT: session.run
-    ORT-->>API: output0 boîtes+coefficients · output1 masques prototypes
-    API->>API: décodage · NMS par classe · recadrage et remise à l'échelle
-    API->>API: aire du masque vers grammes · densité et facteur de forme
-    API->>USDA: GET /foods/search · mis en cache sur disque
-    USDA-->>API: protéines · glucides · lipides · kcal pour 100 g
-    API-->>PWA: JSON · items · totaux · métriques · source
-    PWA->>Utilisateur: affichage des macros et de la masse par aliment
+    ORT-->>API: output0 boxes+coefs · output1 prototype masks
+    API->>API: decode · class-aware NMS · mask crop and rescale
+    API->>API: mask area to grams via density and shape factor
+    API->>USDA: GET /foods/search · cached on disk
+    USDA-->>API: protein · carbs · fat · kcal per 100 g
+    API-->>PWA: JSON · items · totals · timings · source
+    PWA->>User: macro readout with per-item mass
 ```
 
-### Contrat de réponse
+### Response contract
 
 ```json
 {
@@ -226,166 +226,166 @@ sequenceDiagram
 
 ---
 
-## 5. Structure du dépôt
+## 5. Repository layout
 
 ```
 nutrivision/
 ├── .github/workflows/
-│   ├── ci.yml                  analyse · tests unitaires · contrat de données
-│   ├── deploy-lightsail.yml    build · poussée ECR · bascule du conteneur
-│   └── build-mojo.yml          sonde de compilation du noyau Mojo
+│   ├── ci.yml                  lint · unit tests · data contract
+│   ├── deploy-lightsail.yml    build · push to ECR · roll container
+│   └── build-mojo.yml          Mojo kernel compilation probe
 ├── frontend/
-│   ├── index.html              viseur + affichage des macros
+│   ├── index.html              viewfinder + macro readout
 │   ├── css/styles.css
-│   ├── js/camera.js            cycle de vie getUserMedia · capture d'image
-│   ├── js/api.js               fetch multipart · délai · réessai
-│   ├── js/app.js               machine à états · rendu
-│   ├── js/config.js            point d'entrée API · écrit au déploiement
-│   ├── manifest.json           PWA installable
-│   └── sw.js                   préchargement du shell · /api jamais mis en cache
+│   ├── js/camera.js            getUserMedia lifecycle · frame capture
+│   ├── js/api.js               multipart fetch · timeout · retry
+│   ├── js/app.js               state machine · rendering
+│   ├── js/config.js            API endpoint · written at deploy time
+│   ├── manifest.json           installable PWA
+│   └── sw.js                   shell precache · /api never cached
 ├── backend/
 │   ├── app/
-│   │   ├── main.py             FastAPI · CORS · réception multipart
-│   │   ├── config.py           configuration pilotée par l'environnement
-│   │   ├── schemas.py          contrat de réponse figé
-│   │   ├── inference.py        session ORT · letterbox · aiguillage
-│   │   ├── postprocess.py      décodage et NMS NumPy · oracle de correction
-│   │   ├── mojo_bridge.py      interface ctypes vers le noyau Mojo
-│   │   ├── mass.py             aire segmentée vers grammes
-│   │   └── nutrition.py        client USDA · cache disque · repli hors ligne
-│   ├── mojo/postprocess.mojo   décodage et NMS SIMD · export ABI C
-│   ├── tests/                  parité · contrat · masse
-│   ├── Dockerfile              multi-étapes · export ONNX puis runtime allégé
-│   └── pixi.toml               chaîne d'outils MAX épinglée
+│   │   ├── main.py             FastAPI · CORS · multipart intake
+│   │   ├── config.py           environment-driven settings
+│   │   ├── schemas.py          frozen response contract
+│   │   ├── inference.py        ORT session · letterbox · dispatch
+│   │   ├── postprocess.py      NumPy decode and NMS · correctness oracle
+│   │   ├── mojo_bridge.py      ctypes FFI to the Mojo kernel
+│   │   ├── mass.py             segmented area to grams
+│   │   └── nutrition.py        USDA client · disk cache · offline fallback
+│   ├── mojo/postprocess.mojo   SIMD decode and NMS · C ABI export
+│   ├── tests/                  parity · contract · mass
+│   ├── Dockerfile              multi-stage · ONNX export then slim runtime
+│   └── pixi.toml               pinned MAX toolchain
 ├── ml/
-│   ├── class_map.yaml          id FoodSeg103 vers id de classe projet
-│   ├── compile_dataset.py      masques vers polygones · partition déterministe
-│   ├── validate_dataset.py     barrière de contrat en CI
-│   ├── train.py                affinage
-│   └── export_model.py         export ONNX + assertion de parité
+│   ├── class_map.yaml          FoodSeg103 id to project class id
+│   ├── compile_dataset.py      masks to YOLO polygons · deterministic split
+│   ├── validate_dataset.py     CI data contract gate
+│   ├── train.py                fine-tuning
+│   └── export_model.py         ONNX export + parity assertion
 ├── infra/                      Terraform · S3 · CloudFront · ECR · IAM OIDC
-├── amplify.yml                 spécification de build et en-têtes de cache
+├── amplify.yml                 frontend build spec + cache headers
 └── dvc.yaml                    compile · validate · train · export
 ```
 
 ---
 
-## 6. État actuel
+## 6. Current state
 
-Bilan honnête, car une chaîne qui promet plus qu'elle ne livre vaut moins qu'une chaîne qui promet moins.
+Honest accounting, because a pipeline that claims more than it does is worse than one that claims less.
 
-| Composant | État | Remarque |
+| Component | State | Note |
 |---|---|---|
-| PWA sur Amplify | **Déployée** | caméra, capture, envoi et affichage fonctionnels |
-| FastAPI sur Lightsail | **Déployé** | `/healthz` retourne `status: ok` |
-| Chaîne ECR + OIDC | **Opérationnelle** | aucun identifiant statique |
-| Tests CI | **Au vert** | parité du post-traitement, contrat, masse |
-| Modèle d'inférence | **COCO d'origine** | `yolov8n-seg` : pizza, brocoli, banane, pomme, sandwich, orange, carotte, hot-dog, beignet, gâteau |
-| Modèle alimentaire dédié | **En attente** | nécessite la réexécution de la chaîne CT décrite ci-dessous |
-| Noyau Mojo | **Bloqué** | voir §7 |
-| Terraform dans `infra/` | **Spécifié, non provisionné** | décrit l'architecture ECS cible ; le prototype en service repose sur Lightsail |
+| PWA on Amplify | **Deployed** | camera, capture, upload, readout all functional |
+| FastAPI on Lightsail | **Deployed** | `/healthz` returns `status: ok` |
+| ECR + OIDC pipeline | **Operational** | no static credentials anywhere |
+| CI tests | **Passing** | postprocess parity, contract, mass |
+| Inference model | **Stock COCO** | `yolov8n-seg`, recognises pizza, broccoli, banana, apple, sandwich, orange, carrot, hot dog, donut, cake |
+| Custom food model | **Pending** | requires the CT pipeline rerun described below |
+| Mojo kernel | **Blocked** | see §7 |
+| Terraform in `infra/` | **Specified, not provisioned** | describes the target ECS architecture; the running prototype uses Lightsail |
 
-### Limites connues
+### Known limitations
 
-**La masse est modélisée, non mesurée.** Une image monoculaire ne porte aucune information de profondeur. L'estimateur applique une heuristique de solide mince, `h_eff = k · sqrt(A)`, avec facteurs de forme et densités par classe. L'erreur avoisine ±25 à 40 % avec une carte de référence dans le cadre, et davantage sans. Chaque valeur nutritionnelle hérite de cette erreur, raison pour laquelle la réponse expose `mass_confidence` sous la forme `high`, `medium` ou `low` selon la source d'échelle employée.
+**Mass is modelled, not measured.** A monocular image carries no depth. The estimator applies a thin-solid heuristic, `h_eff = k · sqrt(A)`, with per-class shape factors and densities. Error is roughly ±25–40 % with a fiducial reference card in frame, and worse without one. Every macro value inherits that error, which is why the response reports `mass_confidence` as `high`, `medium` or `low` according to the scale source used.
 
-**Le jeu de données de la phase 1 doit être recompilé.** L'artefact actuellement versionné dans S3 a été produit par une implémentation qui fixait l'identifiant de classe à `0` et partitionnait avec `hash()`. Toutes les étiquettes de cet artefact appartiennent à une seule classe. Le `ml/compile_dataset.py` corrigé figure dans ce dépôt ; la chaîne CT n'a pas encore été réexécutée avec.
-
----
-
-## 7. Accélération Mojo — état
-
-Le dépôt contient `backend/mojo/postprocess.mojo`, un noyau qui remplace la boucle de décodage et de suppression des non-maxima par une implémentation SIMD exportée en ABI C et chargée via `ctypes`.
-
-Il n'est **pas actif en production.** `NV_MOJO_ENABLED=0`, et l'API rapporte `"source": "numpy"`.
-
-Mojo 1.0 est paru le 11 août 2026 dans le cadre de Modular 26.5 et a introduit des ruptures que le noyau précède : `fn` a été supprimé au profit de `def`, `alias` renommé en `comptime`, les imports implicites de la bibliothèque standard sont devenus une erreur, `@export` exige désormais un effet `abi("C")` explicite, et `UnsafePointer` est déprécié au profit de `Pointer` assorti d'un paramètre d'origine explicite. La migration est en cours dans `build-mojo.yml`.
-
-**Sur l'affirmation de performance.** ONNX Runtime confie déjà le graphe convolutif à des noyaux C++ optimisés. Mojo n'accélère que le post-traitement — quelques millisecondes sur une requête de plusieurs centaines. Le chiffre à publier est l'écart mesuré de `postprocess_ms` entre `source: "mojo"` et `source: "numpy"` sur une image identique, et non un banc d'essai constructeur comparant une boucle de Mandelbrot scalaire à du CPython pur.
+**The Phase 1 dataset requires recompilation.** The dataset currently versioned in S3 was produced by an implementation that hardcoded the class id to `0` and split on `hash()`. Every label in that artifact belongs to a single class. The corrected `ml/compile_dataset.py` is in this repository; the CT pipeline has not yet been rerun against it.
 
 ---
 
-## 8. Mise en œuvre
+## 7. Mojo acceleration — status
 
-### Prérequis
+The repository contains `backend/mojo/postprocess.mojo`, a kernel that replaces the decode and non-maximum-suppression loop with a SIMD implementation exported over the C ABI and loaded through `ctypes`.
 
-- Un compte AWS avec accès à la console, région `ca-central-1`
-- Une clé d'API USDA FoodData Central — https://fdc.nal.usda.gov/api-key-signup
-- Docker et Python 3.12 pour le travail local ; WSL2 ou Linux pour la chaîne d'outils Mojo
+It is **not active in production.** `NV_MOJO_ENABLED=0`, and the API reports `"source": "numpy"`.
 
-### Configuration AWS initiale
+Mojo 1.0 was released on 11 August 2026 as part of Modular 26.5 and introduced breaking changes that the kernel predates: `fn` was removed in favour of `def`, `alias` was renamed to `comptime`, implicit standard-library imports became an error, `@export` now requires an explicit `abi("C")` effect, and `UnsafePointer` was deprecated in favour of `Pointer` with an explicit origin parameter. Migration is in progress in `build-mojo.yml`.
+
+**On the performance claim.** ONNX Runtime already dispatches the convolutional graph to tuned C++ kernels. Mojo accelerates postprocessing only — a few milliseconds of a several-hundred-millisecond request. The figure worth reporting is the measured delta in `postprocess_ms` between `source: "mojo"` and `source: "numpy"` on an identical frame, not a vendor benchmark comparing a scalar Mandelbrot loop against pure CPython.
+
+---
+
+## 8. Running it
+
+### Prerequisites
+
+- AWS account with the console, region `ca-central-1`
+- A USDA FoodData Central API key — https://fdc.nal.usda.gov/api-key-signup
+- Docker and Python 3.12 for local work; WSL2 or Linux for the Mojo toolchain
+
+### One-time AWS setup
 
 ```
-IAM  → Fournisseurs d'identité → OpenID Connect
-       URL       https://token.actions.githubusercontent.com
-       Audience  sts.amazonaws.com
+IAM  → Identity providers → OpenID Connect
+       URL      https://token.actions.githubusercontent.com
+       Audience sts.amazonaws.com
 
-IAM  → Rôles → Identité web → nutrivision-gha-deploy
-       confiance  repo:Zen-Daitsu/Nutrivision:ref:refs/heads/main
-       politique  ecr:GetAuthorizationToken · poussée ECR · déploiement Lightsail
+IAM  → Roles → Web identity → nutrivision-gha-deploy
+       trust  repo:Zen-Daitsu/Nutrivision:ref:refs/heads/main
+       policy ecr:GetAuthorizationToken · ecr push · lightsail deploy
 
-ECR  → Créer un dépôt privé → nutrivision-api
+ECR  → Create private repository → nutrivision-api
 
-Lightsail → Conteneurs → Small · échelle 1 · nutrivision-api
-            Onglet Images → Ajouter un dépôt → nutrivision-api
+Lightsail → Containers → Small · scale 1 · nutrivision-api
+            Images tab → Add repository → nutrivision-api
 ```
 
-Secrets du dépôt GitHub :
+GitHub repository secrets:
 
-| Nom | Valeur |
+| Name | Value |
 |---|---|
-| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::<ID_DE_COMPTE>:role/nutrivision-gha-deploy` |
-| `USDA_API_KEY` | votre clé FoodData Central |
+| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::<ACCOUNT_ID>:role/nutrivision-gha-deploy` |
+| `USDA_API_KEY` | your FoodData Central key |
 
-Variables du dépôt GitHub :
+GitHub repository variables:
 
-| Nom | Valeur |
+| Name | Value |
 |---|---|
 | `LIGHTSAIL_SERVICE` | `nutrivision-api` |
-| `FRONTEND_ORIGIN` | votre URL Amplify, sans barre oblique finale |
+| `FRONTEND_ORIGIN` | your Amplify URL, no trailing slash |
 
-### Développement local
+### Local development
 
 ```bash
 cd backend
 pip install -r requirements-dev.txt
-pytest -q                     # oracle de correction + contrats
+pytest -q                     # correctness oracle + contracts
 uvicorn app.main:app --reload --port 8000
 
 cd ../frontend
-python3 -m http.server 5173   # getUserMedia exige localhost ou HTTPS
+python3 -m http.server 5173   # getUserMedia requires localhost or HTTPS
 ```
 
-Pour tester sur téléphone, exposez le frontal par un tunnel : une adresse IP locale ne constitue pas un contexte sécurisé et la caméra refusera de s'ouvrir.
+To test on a phone, tunnel the frontend — a LAN IP is not a secure context and the camera will refuse to open.
 
-### Réexécution de la chaîne d'entraînement
+### Rerunning the training pipeline
 
 ```bash
-dvc pull                                   # récupérer FoodSeg103 depuis S3
-# corriger d'abord ml/class_map.yaml d'après category_id.txt de FoodSeg103
-dvc repro compile validate                 # échoue bruyamment sur violation de contrat
-python ml/train.py --data my_dataset/data.yaml --epochs 120   # T4 ou g4dn
+dvc pull                                   # fetch FoodSeg103 from S3
+# correct ml/class_map.yaml against FoodSeg103 category_id.txt first
+dvc repro compile validate                 # fails loudly on contract violations
+python ml/train.py --data my_dataset/data.yaml --epochs 120   # T4 or g4dn
 python ml/export_model.py --weights runs/nutrivision/weights/best.pt
 dvc push
 ```
 
 ---
 
-## 9. Coûts
+## 9. Cost
 
-Les services de conteneurs Lightsail sont facturés à l'heure, sans mise en pause possible. Supprimez le service entre deux séances de travail et recréez-le depuis la même image ECR en trois minutes environ.
+Lightsail container services bill hourly with no pause. Delete the service between working sessions and recreate it from the same ECR image in about three minutes.
 
-| Ressource | Ordre de grandeur |
+| Resource | Approximate |
 |---|---|
-| Lightsail Small, échelle 1 | 15 USD / mois · 0,021 USD / heure |
-| Amplify Hosting | couvert par le palier gratuit à ce trafic |
-| Stockage ECR | négligeable |
-| S3 · dépôt distant DVC | proportionnel à la taille du jeu de données |
+| Lightsail Small, scale 1 | USD 15 / month · USD 0.021 / hour |
+| Amplify Hosting | covered by free tier at this traffic |
+| ECR storage | negligible |
+| S3 · DVC remote | proportional to dataset size |
 
 ---
 
-## 10. Licence et attribution
+## 10. Licence and attribution
 
-Ultralytics YOLOv8 est distribué sous AGPL-3.0. Dans un cadre scolaire, cela ne pose pas de difficulté. Toute distribution ou exploitation hébergée hors de l'établissement déclenche l'article 13 de l'AGPL, qui impose de proposer aux utilisateurs le code source correspondant complet, ou d'acquérir une licence commerciale auprès d'Ultralytics.
+Ultralytics YOLOv8 is distributed under AGPL-3.0. For coursework this is unproblematic. Any distribution or hosted operation outside the institution triggers AGPL §13, which obliges offering the complete corresponding source to users, or obtaining a commercial licence from Ultralytics.
 
-Les données nutritionnelles proviennent de l'API USDA FoodData Central. FoodSeg103 est utilisé selon les conditions publiées pour la recherche.
+Nutritional data is retrieved from the USDA FoodData Central API. FoodSeg103 is used under its published research terms.
