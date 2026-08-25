@@ -18,28 +18,38 @@ jobs:
           locked: false
           cache: false
 
-      - name: Toolchain versions
+      - name: Prepare a library-only copy of the kernel
         run: |
-          pixi run mojo --version
-          pixi list | grep -Ei "max|mojo" || true
+          mkdir -p mojo/gen mojo/build
+          # A shared library cannot contain main(), so drop it from the copy.
+          sed '/^fn main():/,$d; /^def main():/,$d' mojo/postprocess.mojo > mojo/gen/kernel.mojo
+          echo "--- tail of prepared source ---"
+          tail -5 mojo/gen/kernel.mojo
 
-      - name: Build shared library
+      - name: Auto-migrate to Mojo 1.0 and build
         id: build
+        continue-on-error: true
         run: |
-          mkdir -p mojo/build
-          pixi run mojo build --emit shared-lib mojo/probe.mojo -o mojo/build/libnvpost.so
+          pixi run mojo build --emit shared-lib --experimental-fixit \
+            mojo/gen/kernel.mojo -o mojo/build/libnvpost.so
+
+      - name: Show the migrated source
+        if: always()
+        run: |
+          echo "=============== MIGRATED kernel.mojo ==============="
+          cat mojo/gen/kernel.mojo
 
       - name: Inspect the artifact
+        if: steps.build.outcome == 'success'
         run: |
-          ls -la mojo/build/
           file mojo/build/libnvpost.so
           echo "--- exported symbols ---"
-          nm -D mojo/build/libnvpost.so | grep -E "nv_abi_version|nv_decode_nms" || echo "NO C SYMBOLS EXPORTED"
+          nm -D mojo/build/libnvpost.so | grep -E "nv_decode_nms|nv_abi_version" || echo "NO C SYMBOLS EXPORTED"
           echo "--- runtime dependencies ---"
           ldd mojo/build/libnvpost.so
 
       - name: Can ctypes load it outside the pixi env
-        id: ctypes
+        if: steps.build.outcome == 'success'
         continue-on-error: true
         run: |
           python3 -c "
@@ -49,13 +59,11 @@ jobs:
           print('nv_abi_version() ->', lib.nv_abi_version())
           "
 
-      - name: Verdict
-        run: |
-          echo "ctypes load: ${{ steps.ctypes.outcome }}"
-
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mojo-probe
-          path: backend/mojo/build/
+          name: mojo-kernel
+          path: |
+            backend/mojo/build/
+            backend/mojo/gen/
           if-no-files-found: ignore
