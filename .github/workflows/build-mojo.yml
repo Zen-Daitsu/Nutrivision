@@ -18,42 +18,88 @@ jobs:
           locked: false
           cache: false
 
-      - name: Try each pointer spelling
+      - name: Hunt for the origin type in the shipped stdlib
+        continue-on-error: true
         run: |
-          mkdir -p mojo/build
+          ROOT=.pixi/envs/default
+          echo "--- files mentioning MutOrigin ---"
+          grep -rl "MutOrigin" "$ROOT" 2>/dev/null | head -20
+          echo "--- files mentioning OpaquePointer ---"
+          grep -rl "OpaquePointer" "$ROOT" 2>/dev/null | head -20
+          echo "--- AnyOrigin spellings ---"
+          grep -rhoE "[A-Za-z]*AnyOrigin" "$ROOT" 2>/dev/null | sort -u | head -20
+
+      - name: Generate and test every candidate signature
+        run: |
+          mkdir -p mojo/gen mojo/build
+
+          cat > mojo/gen/v1.mojo <<'EOF'
+          from std.memory import OpaquePointer, MutOrigin
+          @export("nv_probe")
+          def nv_probe(p: OpaquePointer[MutOrigin.external], n: Int32) abi("C") -> Int32:
+              return 1
+          EOF
+
+          cat > mojo/gen/v2.mojo <<'EOF'
+          from std.memory import Pointer, MutOrigin
+          @export("nv_probe")
+          def nv_probe(p: Pointer[Float32, MutOrigin.external], n: Int32) abi("C") -> Int32:
+              return 1
+          EOF
+
+          cat > mojo/gen/v3.mojo <<'EOF'
+          from std.memory import Pointer, MutableAnyOrigin
+          @export("nv_probe")
+          def nv_probe(p: Pointer[Float32, MutableAnyOrigin], n: Int32) abi("C") -> Int32:
+              return 1
+          EOF
+
+          cat > mojo/gen/v4.mojo <<'EOF'
+          from std.memory import UnsafePointer, MutableAnyOrigin
+          @export("nv_probe")
+          def nv_probe(p: UnsafePointer[Float32, MutableAnyOrigin], n: Int32) abi("C") -> Int32:
+              return 1
+          EOF
+
+          cat > mojo/gen/v5.mojo <<'EOF'
+          @export("nv_probe")
+          def nv_probe(p: Int, n: Int32) abi("C") -> Int32:
+              return 1
+          EOF
+
           WINNER=""
-          for v in a b c; do
-            echo "=================== VARIANT $v ==================="
-            if pixi run mojo build --emit shared-lib "mojo/probe_$v.mojo" \
-                 -o "mojo/build/lib_$v.so" 2>&1; then
-              echo ">>> VARIANT $v COMPILED"
+          for v in v1 v2 v3 v4 v5; do
+            echo "=================== $v ==================="
+            sed -n '1,3p' "mojo/gen/$v.mojo"
+            if pixi run mojo build --emit shared-lib "mojo/gen/$v.mojo" \
+                 -o "mojo/build/$v.so" 2>&1; then
+              echo ">>> $v COMPILED"
               [ -z "$WINNER" ] && WINNER="$v"
             else
-              echo ">>> variant $v failed"
+              echo ">>> $v failed"
             fi
           done
           echo "WINNER=$WINNER" | tee -a "$GITHUB_ENV"
           ls -la mojo/build/
 
-      - name: Inspect and load
+      - name: Inspect and load the winner
         if: env.WINNER != ''
         continue-on-error: true
         run: |
-          SO="mojo/build/lib_${WINNER}.so"
+          SO="mojo/build/${WINNER}.so"
           file "$SO"
           echo "--- exported symbols ---"
-          nm -D "$SO" | grep -E "nv_decode_nms|nv_abi_version" || echo "NO C SYMBOLS"
+          nm -D "$SO" | grep nv_probe || echo "NO C SYMBOL"
           echo "--- runtime dependencies ---"
           ldd "$SO"
           echo "--- ctypes from system python ---"
           python3 -c "
-          import ctypes, os
-          lib = ctypes.CDLL(os.environ['SO'])
-          lib.nv_abi_version.restype = ctypes.c_int32
-          print('nv_abi_version() ->', lib.nv_abi_version())
-          "
-        env:
-          SO: mojo/build/lib_${{ env.WINNER }}.so
+          import ctypes, sys
+          lib = ctypes.CDLL(sys.argv[1])
+          lib.nv_probe.restype = ctypes.c_int32
+          lib.nv_probe.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+          print('nv_probe(NULL, 0) ->', lib.nv_probe(None, 0))
+          " "$SO"
 
       - uses: actions/upload-artifact@v4
         if: always()
