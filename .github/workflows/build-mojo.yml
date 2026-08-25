@@ -5,37 +5,36 @@
 #  PURPOSE
 #    Validates the foreign-function boundary between the Mojo postprocessing
 #    kernel and the Python inference service before that kernel is promoted
-#    into the production image. Three properties must hold, and each has
-#    previously failed in a way that only surfaces at runtime:
+#    into the production image. Three properties must hold:
 #
 #      1. SYMBOL EXPORT    @export must emit an unmangled C symbol.
 #      2. SELF-CONTAINMENT The shared object must carry no MAX runtime
-#                          dependency, or the 265 MB production image grows by
-#                          ~200 MB and will not fit a 1 GB Lightsail node.
-#      3. MEMORY CONTRACT  The kernel must read NumPy-owned memory correctly
+#                          dependency, or the production image grows ~200 MB
+#                          and no longer fits a 1 GB Lightsail node.
+#      3. MEMORY CONTRACT  The kernel must read caller-owned memory correctly
 #                          through a raw address.
 #
 #  ABI CONTRACT
 #    Pointers cross the boundary as `Int` addresses rather than typed Mojo
-#    pointers. This is deliberate, not a workaround. Mojo 1.0 requires a bound
-#    `origin` parameter on pointer types; leaving it unbound makes the function
-#    parametric, and `@export` rejects parametric functions. Passing the address
-#    as a machine word matches what the C ABI transmits anyway, and confines
-#    origin handling to the function body where genericity is permitted.
+#    pointers. This is deliberate. Mojo 1.0 requires a bound `origin` parameter
+#    on pointer types; leaving it unbound makes the function parametric, and
+#    `@export` rejects parametric functions. Passing the address as a machine
+#    word matches what the C ABI transmits anyway, and confines origin handling
+#    to the function body where genericity is permitted.
 #
-#      Python  ctypes.c_void_p  <--  arr.ctypes.data
-#      Mojo    p: Int           -->  UnsafePointer[Float32](address=p)
+#      Python  ctypes.c_void_p            <--  arr.ctypes.data
+#      Mojo    p: Int                     -->  Pointer[Float32](
+#                                                unsafe_from_address=p)
 #
 #  TOOLCHAIN
 #    Mojo 1.0.0 / MAX 26.5.0, released 2026-08-11. This release removed `fn`,
 #    renamed `alias` to `comptime`, made implicit stdlib imports an error, and
-#    deprecated `UnsafePointer` in favour of `Pointer`. The kernel in
-#    backend/mojo/postprocess.mojo predates these changes and is mid-migration.
+#    deprecated `UnsafePointer` in favour of `Pointer`.
 #
 #  EXIT CRITERIA
-#    When the memory contract passes, this workflow has served its purpose.
-#    Fold the winning signature into backend/mojo/postprocess.mojo, move the
-#    build into backend/Dockerfile, and delete this file.
+#    When the memory contract passes, fold the winning signature into
+#    backend/mojo/postprocess.mojo, move the build into backend/Dockerfile,
+#    and delete this file.
 # ==============================================================================
 
 name: build-mojo
@@ -74,9 +73,8 @@ jobs:
           cache: false      # cache key derives from pixi.lock, which is absent
 
       # ------------------------------------------------------------------
-      # Record the exact toolchain. Mojo is pre-stable and its syntax moves
-      # between releases; a failure report without a version is not
-      # actionable six weeks later.
+      # Mojo is newly stable and its syntax moved substantially in 1.0.
+      # A failure report without a version is not actionable later.
       # ------------------------------------------------------------------
       - name: Record toolchain fingerprint
         run: |
@@ -96,80 +94,77 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ------------------------------------------------------------------
-      # The MAX distribution ships first-party Mojo sources. They are the
-      # authoritative reference for 1.0 idioms — more reliable than
-      # documentation, which lags the compiler.
+      # The MAX distribution ships first-party Mojo sources. They are more
+      # reliable than documentation, which lags the compiler.
       # ------------------------------------------------------------------
       - name: Mine first-party Mojo sources for 1.0 idioms
         continue-on-error: true
         run: |
           SP=".pixi/envs/default/lib/python3.14/site-packages/max"
-          [ -d "$SP" ] || { echo "reference sources not present"; exit 0; }
+          if [ ! -d "$SP" ]; then
+            echo "reference sources not present"
+            exit 0
+          fi
 
           {
             echo "## Reference idioms from shipped MAX sources"
             echo
-            echo "<details><summary>Standard-library import paths</summary>"
+            echo "<details><summary>Pointer construction</summary>"
             echo
             echo '```mojo'
-            grep -rhE "^from |^import " "$SP" --include=*.mojo | sort -u | head -30
+            grep -rhE "Pointer\[.*\]\(" "$SP" --include=*.mojo \
+              | sed 's/^[[:space:]]*//' | sort -u | head -20 || true
             echo '```'
             echo
             echo "</details>"
-            echo
-            echo "<details><summary>Pointer parameter declarations</summary>"
-            echo
-            echo '```mojo'
-            grep -rhE "Pointer\[" "$SP" --include=*.mojo \
-              | sed 's/^[[:space:]]*//' | sort -u | head -20
-            echo '```'
-            echo
-            echo "</details>"
-            echo
-            echo "**Origin types in use:** \`$(grep -rhoE '(Mut|Immut)AnyOrigin' "$SP" --include=*.mojo | sort -u | paste -sd', ')\`"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ------------------------------------------------------------------
-      # Candidate signatures are generated here rather than committed, so a
-      # failed spelling never becomes repository debt and the candidate set
-      # is visible in one place alongside its result.
+      # Candidates are generated here rather than committed, so a rejected
+      # spelling never becomes repository debt.
       # ------------------------------------------------------------------
       - name: Generate candidate kernel signatures
         run: |
           mkdir -p "$GEN_DIR" "$BUILD_DIR"
 
-          # A — deprecated pointer type, single parameter, address constructor
+          # A — current pointer type, address constructor, inferred origin.
+          #     Derived from the constructor list the compiler emitted:
+          #       def __init__(*, unsafe_from_address: Int) -> Self
           cat > "$GEN_DIR/a.mojo" <<'MOJO'
+          from std.memory import Pointer
+
+          @export("nv_probe")
+          def nv_probe(p: Int, n: Int32) abi("C") -> Int32:
+              var ptr = Pointer[Float32](unsafe_from_address=p)
+              return Int32(1) if ptr[0] > 0.0 else Int32(0)
+          MOJO
+
+          # B — deprecated alias, same constructor. Confirms the alias still
+          #     resolves, in case Pointer's defaults differ.
+          cat > "$GEN_DIR/b.mojo" <<'MOJO'
           from std.memory import UnsafePointer
 
           @export("nv_probe")
           def nv_probe(p: Int, n: Int32) abi("C") -> Int32:
-              var ptr = UnsafePointer[Float32](address=p)
+              var ptr = UnsafePointer[Float32](unsafe_from_address=p)
               return Int32(1) if ptr[0] > 0.0 else Int32(0)
           MOJO
 
-          # B — current pointer type with an explicitly bound origin
-          cat > "$GEN_DIR/b.mojo" <<'MOJO'
-          from std.memory import Pointer, MutAnyOrigin
-
-          @export("nv_probe")
-          def nv_probe(p: Int, n: Int32) abi("C") -> Int32:
-              var ptr = Pointer[Float32, MutAnyOrigin](address=p)
-              return Int32(1) if ptr[0] > 0.0 else Int32(0)
-          MOJO
-
-          # C — deprecated type carrying an explicit origin
+          # C — write path. The production kernel writes results back through
+          #     out_* pointers, so a read-only proof is insufficient.
           cat > "$GEN_DIR/c.mojo" <<'MOJO'
-          from std.memory import UnsafePointer, MutAnyOrigin
+          from std.memory import Pointer
 
           @export("nv_probe")
           def nv_probe(p: Int, n: Int32) abi("C") -> Int32:
-              var ptr = UnsafePointer[Float32, MutAnyOrigin](address=p)
-              return Int32(1) if ptr[0] > 0.0 else Int32(0)
+              var ptr = Pointer[Float32](unsafe_from_address=p)
+              var seen = Int32(1) if ptr[0] > 0.0 else Int32(0)
+              ptr[1] = 42.0
+              return seen
           MOJO
 
-          # D — control. Proven to compile; isolates memory access as the
+          # D — control. Known to compile. Isolates memory access as the
           #     variable under test rather than the export machinery.
           cat > "$GEN_DIR/d.mojo" <<'MOJO'
           @export("nv_probe")
@@ -181,9 +176,9 @@ jobs:
         id: compile
         run: |
           declare -A LABEL=(
-            [a]="UnsafePointer, inferred origin"
-            [b]="Pointer with MutAnyOrigin"
-            [c]="UnsafePointer with MutAnyOrigin"
+            [a]="Pointer, unsafe_from_address"
+            [b]="UnsafePointer, unsafe_from_address"
+            [c]="Pointer, read and write"
             [d]="control, no memory access"
           )
 
@@ -193,12 +188,18 @@ jobs:
           for v in a b c d; do
             echo "::group::candidate ${v} — ${LABEL[$v]}"
             cat "$GEN_DIR/$v.mojo"
+
             if pixi run mojo build --emit shared-lib \
                  "$GEN_DIR/$v.mojo" -o "$BUILD_DIR/$v.so" 2>&1; then
-              ROWS+="| \`${v}\` | ${LABEL[$v]} | ✅ compiled |"$'\n'
-              [ -z "$WINNER" ] && [ "$v" != "d" ] && WINNER="$v"
+              ROWS+="| \`${v}\` | ${LABEL[$v]} | compiled |"$'\n'
+              # Prefer the write-capable variant; never elect the control.
+              if [ "$v" = "c" ]; then
+                WINNER="c"
+              elif [ -z "$WINNER" ] && [ "$v" != "d" ]; then
+                WINNER="$v"
+              fi
             else
-              ROWS+="| \`${v}\` | ${LABEL[$v]} | ❌ rejected |"$'\n'
+              ROWS+="| \`${v}\` | ${LABEL[$v]} | rejected |"$'\n'
             fi
             echo "::endgroup::"
           done
@@ -215,9 +216,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ------------------------------------------------------------------
-      # `statically linked` in ldd output is the property that decides
-      # whether this ships. Anything else means the MAX runtime must
-      # accompany the library into the production image.
+      # `statically linked` decides whether this ships. Anything else means
+      # the MAX runtime must accompany the library into production.
       # ------------------------------------------------------------------
       - name: Verify linkage and symbol export
         if: steps.compile.outputs.winner != ''
@@ -225,7 +225,7 @@ jobs:
           SO="$BUILD_DIR/${{ steps.compile.outputs.winner }}.so"
           SIZE=$(stat -c%s "$SO")
           SYMBOL=$(nm -D "$SO" | grep -E "\bnv_probe\b" || echo "ABSENT")
-          DEPS=$(ldd "$SO" 2>&1 | sed 's/^[[:space:]]*//')
+          DEPS=$(ldd "$SO" 2>&1 | sed 's/^[[:space:]]*//' | head -1)
 
           {
             echo "## Artifact"
@@ -234,30 +234,34 @@ jobs:
             echo "|---|---|"
             echo "| Size | $((SIZE / 1024)) KB |"
             echo "| Exported symbol | \`${SYMBOL}\` |"
-            echo "| Linkage | \`$(echo "$DEPS" | head -1)\` |"
+            echo "| Linkage | \`${DEPS}\` |"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
 
-          echo "$DEPS" | grep -qi "statically linked" \
-            || echo "::warning::Library carries runtime dependencies; production image will grow"
+          if ! echo "$DEPS" | grep -qi "statically linked"; then
+            echo "::warning::Library carries runtime dependencies; production image will grow"
+          fi
 
-          echo "$SYMBOL" | grep -q "ABSENT" \
-            && { echo "::error::No C symbol exported"; exit 1; } || true
+          if echo "$SYMBOL" | grep -q "ABSENT"; then
+            echo "::error::No C symbol exported"
+            exit 1
+          fi
 
       # ------------------------------------------------------------------
       # The decisive test. A library that loads is not a library that reads
-      # the caller's memory correctly. This drives a real buffer through the
-      # boundary and asserts the value observed on the Mojo side.
+      # and writes the caller's memory correctly.
       # ------------------------------------------------------------------
       - name: Assert memory contract across the FFI boundary
         if: steps.compile.outputs.winner != ''
         id: contract
+        env:
+          WINNER: ${{ steps.compile.outputs.winner }}
         run: |
-          SO="$BUILD_DIR/${{ steps.compile.outputs.winner }}.so"
-          python3 - "$SO" <<'PY'
+          python3 - "$BUILD_DIR/${WINNER}.so" "$WINNER" <<'PY'
           import array, ctypes, sys
 
-          lib = ctypes.CDLL(sys.argv[1])
+          so, variant = sys.argv[1], sys.argv[2]
+          lib = ctypes.CDLL(so)
           lib.nv_probe.restype = ctypes.c_int32
           lib.nv_probe.argtypes = [ctypes.c_void_p, ctypes.c_int32]
 
@@ -268,41 +272,48 @@ jobs:
           buf[0] = -1.0
           negative = lib.nv_probe(addr, len(buf))
 
-          print(f"buf[0] = +3.5 -> kernel returned {positive}")
-          print(f"buf[0] = -1.0 -> kernel returned {negative}")
-
+          print(f"read  buf[0] = +3.5 -> kernel returned {positive}")
+          print(f"read  buf[0] = -1.0 -> kernel returned {negative}")
           assert positive == 1, "kernel did not observe a positive value"
           assert negative == 0, "kernel did not observe the mutated value"
-          print("memory contract holds: kernel reads caller-owned memory")
+
+          if variant == "c":
+              print(f"write buf[1] = {buf[1]} (kernel should have set 42.0)")
+              assert buf[1] == 42.0, "kernel write did not reach caller memory"
+              print("bidirectional memory contract holds")
+          else:
+              print("read-only memory contract holds")
           PY
 
       - name: Publish verdict
         if: always()
+        env:
+          WINNER: ${{ steps.compile.outputs.winner }}
+          CONTRACT: ${{ steps.contract.outcome }}
         run: |
-          WINNER="${{ steps.compile.outputs.winner }}"
           {
             echo "## Verdict"
             echo
             if [ -z "$WINNER" ]; then
-              echo "❌ **No candidate compiled.** The exported-function signature is"
-              echo "still unresolved. Review the reference idioms above and extend"
-              echo "the candidate set."
-            elif [ "${{ steps.contract.outcome }}" = "success" ]; then
-              echo "✅ **FFI contract validated** using variant \`${WINNER}\`."
+              echo "**No candidate compiled.** The exported-function signature"
+              echo "remains unresolved. Review the reference idioms above and"
+              echo "extend the candidate set."
+            elif [ "$CONTRACT" = "success" ]; then
+              echo "**FFI contract validated** using variant \`${WINNER}\`."
               echo
               echo "Next actions:"
               echo "1. Apply this signature to \`backend/mojo/postprocess.mojo\`."
               echo "2. Change \`mojo_bridge.py\` argtypes to \`c_void_p\` and pass"
-              echo "   \`arr.ctypes.data\`."
+              echo "   \`arr.ctypes.data\` at the call sites."
               echo "3. Add the pixi build stage to \`backend/Dockerfile\`, set"
               echo "   \`NV_MOJO_ENABLED=1\`, and confirm parity via"
               echo "   \`tests/test_postprocess.py\`."
               echo "4. Delete this workflow."
             else
-              echo "⚠️ **Compiles but the memory contract failed.** Variant"
-              echo "\`${WINNER}\` produced a loadable library that does not read"
-              echo "caller memory as expected. Inspect the address-to-pointer"
-              echo "conversion before proceeding."
+              echo "**Compiles but the memory contract failed.** Variant"
+              echo "\`${WINNER}\` produced a loadable library that does not"
+              echo "access caller memory as expected. Inspect the"
+              echo "address-to-pointer conversion before proceeding."
             fi
             echo
           } >> "$GITHUB_STEP_SUMMARY"
