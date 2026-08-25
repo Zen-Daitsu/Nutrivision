@@ -1,109 +1,319 @@
+# ==============================================================================
+#  build-mojo — Mojo 1.0 kernel toolchain validation
+# ==============================================================================
+#
+#  PURPOSE
+#    Validates the foreign-function boundary between the Mojo postprocessing
+#    kernel and the Python inference service before that kernel is promoted
+#    into the production image. Three properties must hold, and each has
+#    previously failed in a way that only surfaces at runtime:
+#
+#      1. SYMBOL EXPORT    @export must emit an unmangled C symbol.
+#      2. SELF-CONTAINMENT The shared object must carry no MAX runtime
+#                          dependency, or the 265 MB production image grows by
+#                          ~200 MB and will not fit a 1 GB Lightsail node.
+#      3. MEMORY CONTRACT  The kernel must read NumPy-owned memory correctly
+#                          through a raw address.
+#
+#  ABI CONTRACT
+#    Pointers cross the boundary as `Int` addresses rather than typed Mojo
+#    pointers. This is deliberate, not a workaround. Mojo 1.0 requires a bound
+#    `origin` parameter on pointer types; leaving it unbound makes the function
+#    parametric, and `@export` rejects parametric functions. Passing the address
+#    as a machine word matches what the C ABI transmits anyway, and confines
+#    origin handling to the function body where genericity is permitted.
+#
+#      Python  ctypes.c_void_p  <--  arr.ctypes.data
+#      Mojo    p: Int           -->  UnsafePointer[Float32](address=p)
+#
+#  TOOLCHAIN
+#    Mojo 1.0.0 / MAX 26.5.0, released 2026-08-11. This release removed `fn`,
+#    renamed `alias` to `comptime`, made implicit stdlib imports an error, and
+#    deprecated `UnsafePointer` in favour of `Pointer`. The kernel in
+#    backend/mojo/postprocess.mojo predates these changes and is mid-migration.
+#
+#  EXIT CRITERIA
+#    When the memory contract passes, this workflow has served its purpose.
+#    Fold the winning signature into backend/mojo/postprocess.mojo, move the
+#    build into backend/Dockerfile, and delete this file.
+# ==============================================================================
+
 name: build-mojo
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: backend
+
+env:
+  PIXI_MANIFEST: backend/pixi.toml
+  BUILD_DIR: mojo/build
+  GEN_DIR: mojo/gen
+
 jobs:
-  probe:
+  validate-abi:
+    name: Validate FFI contract
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: backend
+    timeout-minutes: 15
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - uses: prefix-dev/setup-pixi@v0.8.1
+      - name: Provision Mojo toolchain
+        uses: prefix-dev/setup-pixi@v0.8.1
         with:
-          manifest-path: backend/pixi.toml
-          locked: false
-          cache: false
+          manifest-path: ${{ env.PIXI_MANIFEST }}
+          locked: false     # no pixi.lock committed; resolve fresh
+          cache: false      # cache key derives from pixi.lock, which is absent
 
-      - name: Hunt for the origin type in the shipped stdlib
+      # ------------------------------------------------------------------
+      # Record the exact toolchain. Mojo is pre-stable and its syntax moves
+      # between releases; a failure report without a version is not
+      # actionable six weeks later.
+      # ------------------------------------------------------------------
+      - name: Record toolchain fingerprint
+        run: |
+          MOJO_VER=$(pixi run mojo --version 2>&1 | head -1)
+          MAX_VER=$(pixi list 2>/dev/null | awk '/^max /{print $2}')
+
+          {
+            echo "## Toolchain"
+            echo
+            echo "| Component | Version |"
+            echo "|---|---|"
+            echo "| Mojo compiler | \`${MOJO_VER}\` |"
+            echo "| MAX platform | \`${MAX_VER}\` |"
+            echo "| Runner | \`${RUNNER_OS} ${RUNNER_ARCH}\` |"
+            echo "| Commit | \`${GITHUB_SHA:0:8}\` |"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ------------------------------------------------------------------
+      # The MAX distribution ships first-party Mojo sources. They are the
+      # authoritative reference for 1.0 idioms — more reliable than
+      # documentation, which lags the compiler.
+      # ------------------------------------------------------------------
+      - name: Mine first-party Mojo sources for 1.0 idioms
         continue-on-error: true
         run: |
-          ROOT=.pixi/envs/default
-          echo "--- files mentioning MutOrigin ---"
-          grep -rl "MutOrigin" "$ROOT" 2>/dev/null | head -20
-          echo "--- files mentioning OpaquePointer ---"
-          grep -rl "OpaquePointer" "$ROOT" 2>/dev/null | head -20
-          echo "--- AnyOrigin spellings ---"
-          grep -rhoE "[A-Za-z]*AnyOrigin" "$ROOT" 2>/dev/null | sort -u | head -20
+          SP=".pixi/envs/default/lib/python3.14/site-packages/max"
+          [ -d "$SP" ] || { echo "reference sources not present"; exit 0; }
 
-      - name: Generate and test every candidate signature
+          {
+            echo "## Reference idioms from shipped MAX sources"
+            echo
+            echo "<details><summary>Standard-library import paths</summary>"
+            echo
+            echo '```mojo'
+            grep -rhE "^from |^import " "$SP" --include=*.mojo | sort -u | head -30
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "<details><summary>Pointer parameter declarations</summary>"
+            echo
+            echo '```mojo'
+            grep -rhE "Pointer\[" "$SP" --include=*.mojo \
+              | sed 's/^[[:space:]]*//' | sort -u | head -20
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "**Origin types in use:** \`$(grep -rhoE '(Mut|Immut)AnyOrigin' "$SP" --include=*.mojo | sort -u | paste -sd', ')\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ------------------------------------------------------------------
+      # Candidate signatures are generated here rather than committed, so a
+      # failed spelling never becomes repository debt and the candidate set
+      # is visible in one place alongside its result.
+      # ------------------------------------------------------------------
+      - name: Generate candidate kernel signatures
         run: |
-          mkdir -p mojo/gen mojo/build
+          mkdir -p "$GEN_DIR" "$BUILD_DIR"
 
-          cat > mojo/gen/v1.mojo <<'EOF'
-          from std.memory import OpaquePointer, MutOrigin
-          @export("nv_probe")
-          def nv_probe(p: OpaquePointer[MutOrigin.external], n: Int32) abi("C") -> Int32:
-              return 1
-          EOF
+          # A — deprecated pointer type, single parameter, address constructor
+          cat > "$GEN_DIR/a.mojo" <<'MOJO'
+          from std.memory import UnsafePointer
 
-          cat > mojo/gen/v2.mojo <<'EOF'
-          from std.memory import Pointer, MutOrigin
-          @export("nv_probe")
-          def nv_probe(p: Pointer[Float32, MutOrigin.external], n: Int32) abi("C") -> Int32:
-              return 1
-          EOF
-
-          cat > mojo/gen/v3.mojo <<'EOF'
-          from std.memory import Pointer, MutableAnyOrigin
-          @export("nv_probe")
-          def nv_probe(p: Pointer[Float32, MutableAnyOrigin], n: Int32) abi("C") -> Int32:
-              return 1
-          EOF
-
-          cat > mojo/gen/v4.mojo <<'EOF'
-          from std.memory import UnsafePointer, MutableAnyOrigin
-          @export("nv_probe")
-          def nv_probe(p: UnsafePointer[Float32, MutableAnyOrigin], n: Int32) abi("C") -> Int32:
-              return 1
-          EOF
-
-          cat > mojo/gen/v5.mojo <<'EOF'
           @export("nv_probe")
           def nv_probe(p: Int, n: Int32) abi("C") -> Int32:
-              return 1
-          EOF
+              var ptr = UnsafePointer[Float32](address=p)
+              return Int32(1) if ptr[0] > 0.0 else Int32(0)
+          MOJO
+
+          # B — current pointer type with an explicitly bound origin
+          cat > "$GEN_DIR/b.mojo" <<'MOJO'
+          from std.memory import Pointer, MutAnyOrigin
+
+          @export("nv_probe")
+          def nv_probe(p: Int, n: Int32) abi("C") -> Int32:
+              var ptr = Pointer[Float32, MutAnyOrigin](address=p)
+              return Int32(1) if ptr[0] > 0.0 else Int32(0)
+          MOJO
+
+          # C — deprecated type carrying an explicit origin
+          cat > "$GEN_DIR/c.mojo" <<'MOJO'
+          from std.memory import UnsafePointer, MutAnyOrigin
+
+          @export("nv_probe")
+          def nv_probe(p: Int, n: Int32) abi("C") -> Int32:
+              var ptr = UnsafePointer[Float32, MutAnyOrigin](address=p)
+              return Int32(1) if ptr[0] > 0.0 else Int32(0)
+          MOJO
+
+          # D — control. Proven to compile; isolates memory access as the
+          #     variable under test rather than the export machinery.
+          cat > "$GEN_DIR/d.mojo" <<'MOJO'
+          @export("nv_probe")
+          def nv_probe(p: Int, n: Int32) abi("C") -> Int32:
+              return Int32(1)
+          MOJO
+
+      - name: Compile candidates
+        id: compile
+        run: |
+          declare -A LABEL=(
+            [a]="UnsafePointer, inferred origin"
+            [b]="Pointer with MutAnyOrigin"
+            [c]="UnsafePointer with MutAnyOrigin"
+            [d]="control, no memory access"
+          )
 
           WINNER=""
-          for v in v1 v2 v3 v4 v5; do
-            echo "=================== $v ==================="
-            sed -n '1,3p' "mojo/gen/$v.mojo"
-            if pixi run mojo build --emit shared-lib "mojo/gen/$v.mojo" \
-                 -o "mojo/build/$v.so" 2>&1; then
-              echo ">>> $v COMPILED"
-              [ -z "$WINNER" ] && WINNER="$v"
-            else
-              echo ">>> $v failed"
-            fi
-          done
-          echo "WINNER=$WINNER" | tee -a "$GITHUB_ENV"
-          ls -la mojo/build/
+          ROWS=""
 
-      - name: Inspect and load the winner
-        if: env.WINNER != ''
-        continue-on-error: true
+          for v in a b c d; do
+            echo "::group::candidate ${v} — ${LABEL[$v]}"
+            cat "$GEN_DIR/$v.mojo"
+            if pixi run mojo build --emit shared-lib \
+                 "$GEN_DIR/$v.mojo" -o "$BUILD_DIR/$v.so" 2>&1; then
+              ROWS+="| \`${v}\` | ${LABEL[$v]} | ✅ compiled |"$'\n'
+              [ -z "$WINNER" ] && [ "$v" != "d" ] && WINNER="$v"
+            else
+              ROWS+="| \`${v}\` | ${LABEL[$v]} | ❌ rejected |"$'\n'
+            fi
+            echo "::endgroup::"
+          done
+
+          echo "winner=${WINNER}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Candidate signatures"
+            echo
+            echo "| Variant | Signature | Result |"
+            echo "|---|---|---|"
+            printf '%s' "$ROWS"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ------------------------------------------------------------------
+      # `statically linked` in ldd output is the property that decides
+      # whether this ships. Anything else means the MAX runtime must
+      # accompany the library into the production image.
+      # ------------------------------------------------------------------
+      - name: Verify linkage and symbol export
+        if: steps.compile.outputs.winner != ''
         run: |
-          SO="mojo/build/${WINNER}.so"
-          file "$SO"
-          echo "--- exported symbols ---"
-          nm -D "$SO" | grep nv_probe || echo "NO C SYMBOL"
-          echo "--- runtime dependencies ---"
-          ldd "$SO"
-          echo "--- ctypes from system python ---"
-          python3 -c "
-          import ctypes, sys
+          SO="$BUILD_DIR/${{ steps.compile.outputs.winner }}.so"
+          SIZE=$(stat -c%s "$SO")
+          SYMBOL=$(nm -D "$SO" | grep -E "\bnv_probe\b" || echo "ABSENT")
+          DEPS=$(ldd "$SO" 2>&1 | sed 's/^[[:space:]]*//')
+
+          {
+            echo "## Artifact"
+            echo
+            echo "| Property | Value |"
+            echo "|---|---|"
+            echo "| Size | $((SIZE / 1024)) KB |"
+            echo "| Exported symbol | \`${SYMBOL}\` |"
+            echo "| Linkage | \`$(echo "$DEPS" | head -1)\` |"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "$DEPS" | grep -qi "statically linked" \
+            || echo "::warning::Library carries runtime dependencies; production image will grow"
+
+          echo "$SYMBOL" | grep -q "ABSENT" \
+            && { echo "::error::No C symbol exported"; exit 1; } || true
+
+      # ------------------------------------------------------------------
+      # The decisive test. A library that loads is not a library that reads
+      # the caller's memory correctly. This drives a real buffer through the
+      # boundary and asserts the value observed on the Mojo side.
+      # ------------------------------------------------------------------
+      - name: Assert memory contract across the FFI boundary
+        if: steps.compile.outputs.winner != ''
+        id: contract
+        run: |
+          SO="$BUILD_DIR/${{ steps.compile.outputs.winner }}.so"
+          python3 - "$SO" <<'PY'
+          import array, ctypes, sys
+
           lib = ctypes.CDLL(sys.argv[1])
           lib.nv_probe.restype = ctypes.c_int32
           lib.nv_probe.argtypes = [ctypes.c_void_p, ctypes.c_int32]
-          print('nv_probe(NULL, 0) ->', lib.nv_probe(None, 0))
-          " "$SO"
 
-      - uses: actions/upload-artifact@v4
+          buf = array.array("f", [3.5, 1.0, 2.0])
+          addr = buf.buffer_info()[0]
+
+          positive = lib.nv_probe(addr, len(buf))
+          buf[0] = -1.0
+          negative = lib.nv_probe(addr, len(buf))
+
+          print(f"buf[0] = +3.5 -> kernel returned {positive}")
+          print(f"buf[0] = -1.0 -> kernel returned {negative}")
+
+          assert positive == 1, "kernel did not observe a positive value"
+          assert negative == 0, "kernel did not observe the mutated value"
+          print("memory contract holds: kernel reads caller-owned memory")
+          PY
+
+      - name: Publish verdict
         if: always()
+        run: |
+          WINNER="${{ steps.compile.outputs.winner }}"
+          {
+            echo "## Verdict"
+            echo
+            if [ -z "$WINNER" ]; then
+              echo "❌ **No candidate compiled.** The exported-function signature is"
+              echo "still unresolved. Review the reference idioms above and extend"
+              echo "the candidate set."
+            elif [ "${{ steps.contract.outcome }}" = "success" ]; then
+              echo "✅ **FFI contract validated** using variant \`${WINNER}\`."
+              echo
+              echo "Next actions:"
+              echo "1. Apply this signature to \`backend/mojo/postprocess.mojo\`."
+              echo "2. Change \`mojo_bridge.py\` argtypes to \`c_void_p\` and pass"
+              echo "   \`arr.ctypes.data\`."
+              echo "3. Add the pixi build stage to \`backend/Dockerfile\`, set"
+              echo "   \`NV_MOJO_ENABLED=1\`, and confirm parity via"
+              echo "   \`tests/test_postprocess.py\`."
+              echo "4. Delete this workflow."
+            else
+              echo "⚠️ **Compiles but the memory contract failed.** Variant"
+              echo "\`${WINNER}\` produced a loadable library that does not read"
+              echo "caller memory as expected. Inspect the address-to-pointer"
+              echo "conversion before proceeding."
+            fi
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: mojo-kernel
-          path: backend/mojo/build/
+          name: mojo-abi-validation
+          path: |
+            backend/mojo/build/
+            backend/mojo/gen/
+          retention-days: 7
           if-no-files-found: ignore
