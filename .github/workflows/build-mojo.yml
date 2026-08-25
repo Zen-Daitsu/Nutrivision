@@ -23,46 +23,15 @@ jobs:
           pixi run mojo --version
           pixi list | grep -Ei "max|mojo" || true
 
-      - name: What does mojo build support
-        continue-on-error: true
-        run: pixi run mojo build --help
-
-      - name: Variant A - decorator only
-        id: a
-        continue-on-error: true
-        run: pixi run mojo run mojo/probe.mojo
-
-      - name: Variant B - decorator plus effect
-        id: b
-        continue-on-error: true
-        run: pixi run mojo run mojo/probe_b.mojo
-
-      - name: Which variant parsed
-        run: |
-          echo "A: ${{ steps.a.outcome }}"
-          echo "B: ${{ steps.b.outcome }}"
-          if [ "${{ steps.a.outcome }}" = "success" ]; then
-            echo "WINNER=mojo/probe.mojo"
-          elif [ "${{ steps.b.outcome }}" = "success" ]; then
-            echo "WINNER=mojo/probe_b.mojo"
-          else
-            echo "NEITHER VARIANT PARSED"
-            exit 1
-          fi
-
       - name: Build shared library
         id: build
-        continue-on-error: true
         run: |
           mkdir -p mojo/build
-          SRC=mojo/probe.mojo
-          [ "${{ steps.a.outcome }}" = "success" ] || SRC=mojo/probe_b.mojo
-          echo "building $SRC"
-          pixi run mojo build --emit shared-lib "$SRC" -o mojo/build/libnvpost.so
+          pixi run mojo build --emit shared-lib mojo/probe.mojo -o mojo/build/libnvpost.so
 
       - name: Inspect the artifact
-        if: steps.build.outcome == 'success'
         run: |
+          ls -la mojo/build/
           file mojo/build/libnvpost.so
           echo "--- exported symbols ---"
           nm -D mojo/build/libnvpost.so | grep -E "nv_abi_version|nv_decode_nms" || echo "NO C SYMBOLS EXPORTED"
@@ -70,7 +39,7 @@ jobs:
           ldd mojo/build/libnvpost.so
 
       - name: Can ctypes load it outside the pixi env
-        if: steps.build.outcome == 'success'
+        id: ctypes
         continue-on-error: true
         run: |
           python3 -c "
@@ -79,6 +48,10 @@ jobs:
           lib.nv_abi_version.restype = ctypes.c_int32
           print('nv_abi_version() ->', lib.nv_abi_version())
           "
+
+      - name: Verdict
+        run: |
+          echo "ctypes load: ${{ steps.ctypes.outcome }}"
 
       - uses: actions/upload-artifact@v4
         if: always()
