@@ -1,13 +1,25 @@
-# Stage 1 — compile the Mojo kernel with the pinned MAX toolchain.
-FROM ghcr.io/prefix-dev/pixi:0.41.4 AS mojo
-WORKDIR /build
-COPY pixi.toml pixi.lock ./
-RUN pixi install --locked
-COPY mojo/ ./mojo/
-RUN mkdir -p mojo/build && \
-    pixi run mojo build --emit shared-lib mojo/postprocess.mojo -o mojo/build/libnvpost.so
+# syntax=docker/dockerfile:1.7
+FROM python:3.12-slim AS exporter
+ENV YOLO_CONFIG_DIR=/tmp MPLCONFIGDIR=/tmp
 
-# Stage 2 — runtime.
+RUN pip install --no-cache-dir torch==2.5.1 torchvision==0.20.1 \
+      --index-url https://download.pytorch.org/whl/cpu
+
+# ultralytics pulls opencv-python (GUI build), which needs X11 libs that slim
+# does not ship. Swap it for the headless wheel the runtime stage already uses.
+RUN pip install --no-cache-dir ultralytics==8.3.55 onnx==1.17.0 onnxslim==0.1.42 onnxruntime==1.20.1 \
+ && pip uninstall -y opencv-python \
+ && pip install --no-cache-dir opencv-python-headless==4.10.0.84
+
+WORKDIR /export
+RUN <<'PY' python3
+import json
+from ultralytics import YOLO
+m = YOLO("yolov8n-seg.pt")
+m.export(format="onnx", imgsz=640, opset=17, simplify=True, dynamic=False)
+json.dump([m.names[i] for i in sorted(m.names)], open("yolov8n-seg.classes.json", "w"))
+PY
+
 FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -19,15 +31,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
 COPY data/ ./data/
-COPY models/ ./models/
-COPY --from=mojo /build/mojo/build/libnvpost.so ./mojo/build/libnvpost.so
+COPY --from=exporter /export/yolov8n-seg.onnx         ./models/yolov8n-seg.onnx
+COPY --from=exporter /export/yolov8n-seg.classes.json ./models/yolov8n-seg.classes.json
 
 RUN useradd -r -u 10001 nutrivision && chown -R nutrivision /srv
 USER nutrivision
 
-ENV NV_MODEL_PATH=/srv/models/yolov8s-seg.onnx \
-    NV_MOJO_LIB_PATH=/srv/mojo/build/libnvpost.so \
-    NV_ORT_INTRA_THREADS=4
+ENV NV_MODEL_PATH=/srv/models/yolov8n-seg.onnx \
+    NV_MOJO_ENABLED=0 \
+    NV_ORT_INTRA_THREADS=2
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD curl -fsS http://localhost:8000/healthz || exit 1
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
