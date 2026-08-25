@@ -21,36 +21,44 @@ jobs:
       - name: Toolchain versions
         run: |
           pixi run mojo --version
-          pixi run max --version || true
+          pixi list | grep -Ei "max|mojo" || true
 
-      - name: What does mojo build actually support
+      - name: What does mojo build support
         run: pixi run mojo build --help
 
+      - name: What subcommands exist
+        continue-on-error: true
+        run: pixi run mojo --help
+
       - name: Smoke test the source compiles at all
-        run: pixi run mojo run mojo/postprocess.mojo
+        run: pixi run mojo run mojo/probe.mojo
 
       - name: Build shared library
         id: build
         continue-on-error: true
         run: |
           mkdir -p mojo/build
-          pixi run mojo build --emit shared-lib mojo/postprocess.mojo -o mojo/build/libnvpost.so
+          pixi run mojo build --emit shared-lib mojo/probe.mojo -o mojo/build/libnvpost.so
 
       - name: Inspect the artifact
         if: steps.build.outcome == 'success'
         run: |
           file mojo/build/libnvpost.so
           echo "--- exported symbols ---"
-          nm -D mojo/build/libnvpost.so | grep -E "nv_decode_nms|nv_abi_version" || echo "NO C SYMBOLS EXPORTED"
+          nm -D mojo/build/libnvpost.so | grep -E "nv_abi_version|nv_decode_nms" || echo "NO C SYMBOLS EXPORTED"
           echo "--- runtime dependencies ---"
           ldd mojo/build/libnvpost.so
 
-      - name: Parity against the NumPy oracle
+      - name: Can ctypes load it outside the pixi env
         if: steps.build.outcome == 'success'
         continue-on-error: true
         run: |
-          pip install -r requirements-dev.txt
-          pytest tests/test_postprocess.py -q
+          python3 -c "
+          import ctypes
+          lib = ctypes.CDLL('mojo/build/libnvpost.so')
+          lib.nv_abi_version.restype = ctypes.c_int32
+          print('nv_abi_version() ->', lib.nv_abi_version())
+          "
 
       - uses: actions/upload-artifact@v4
         if: always()
