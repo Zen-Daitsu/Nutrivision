@@ -1,8 +1,16 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.12-slim AS exporter
+ENV YOLO_CONFIG_DIR=/tmp MPLCONFIGDIR=/tmp
+
 RUN pip install --no-cache-dir torch==2.5.1 torchvision==0.20.1 \
-      --index-url https://download.pytorch.org/whl/cpu \
- && pip install --no-cache-dir ultralytics==8.3.55 onnx==1.17.0 onnxslim==0.1.42 onnxruntime==1.20.1
+      --index-url https://download.pytorch.org/whl/cpu
+
+# ultralytics pulls opencv-python (GUI build), which needs X11 libs that slim
+# does not ship. Swap it for the headless wheel the runtime stage already uses.
+RUN pip install --no-cache-dir ultralytics==8.3.55 onnx==1.17.0 onnxslim==0.1.42 onnxruntime==1.20.1 \
+ && pip uninstall -y opencv-python \
+ && pip install --no-cache-dir opencv-python-headless==4.10.0.84
+
 WORKDIR /export
 RUN <<'PY' python3
 import json
