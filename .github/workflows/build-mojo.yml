@@ -1,0 +1,60 @@
+name: build-mojo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          manifest-path: backend/pixi.toml
+          locked: false
+          cache: true
+
+      - name: Toolchain versions
+        run: |
+          pixi run mojo --version
+          pixi run max --version || true
+
+      - name: What does mojo build actually support
+        run: pixi run mojo build --help
+
+      - name: Smoke test the source compiles at all
+        run: pixi run mojo run mojo/postprocess.mojo
+
+      - name: Build shared library
+        id: build
+        continue-on-error: true
+        run: |
+          mkdir -p mojo/build
+          pixi run mojo build --emit shared-lib mojo/postprocess.mojo -o mojo/build/libnvpost.so
+
+      - name: Inspect the artifact
+        if: steps.build.outcome == 'success'
+        run: |
+          file mojo/build/libnvpost.so
+          echo "--- exported symbols ---"
+          nm -D mojo/build/libnvpost.so | grep -E "nv_decode_nms|nv_abi_version" || echo "NO C SYMBOLS EXPORTED"
+          echo "--- runtime dependencies ---"
+          ldd mojo/build/libnvpost.so
+
+      - name: Parity against the NumPy oracle
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          pip install -r requirements-dev.txt
+          pytest tests/test_postprocess.py -q
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mojo-probe
+          path: backend/mojo/build/
+          if-no-files-found: ignore
