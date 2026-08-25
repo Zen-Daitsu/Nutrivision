@@ -18,51 +18,42 @@ jobs:
           locked: false
           cache: false
 
-      - name: Confirm the checked-out source
-        run: |
-          echo "commit: $(git rev-parse --short HEAD)"
-          cat mojo/probe.mojo
-
-      - name: Build with std.memory import
-        id: v1
-        continue-on-error: true
+      - name: Try each pointer spelling
         run: |
           mkdir -p mojo/build
-          pixi run mojo build --emit shared-lib mojo/probe.mojo -o mojo/build/libnvpost.so
+          WINNER=""
+          for v in a b c; do
+            echo "=================== VARIANT $v ==================="
+            if pixi run mojo build --emit shared-lib "mojo/probe_$v.mojo" \
+                 -o "mojo/build/lib_$v.so" 2>&1; then
+              echo ">>> VARIANT $v COMPILED"
+              [ -z "$WINNER" ] && WINNER="$v"
+            else
+              echo ">>> variant $v failed"
+            fi
+          done
+          echo "WINNER=$WINNER" | tee -a "$GITHUB_ENV"
+          ls -la mojo/build/
 
-      - name: Retry with bare memory import
-        id: v2
-        if: steps.v1.outcome == 'failure'
+      - name: Inspect and load
+        if: env.WINNER != ''
         continue-on-error: true
         run: |
-          sed -i 's/^from std\.memory import/from memory import/' mojo/probe.mojo
-          pixi run mojo build --emit shared-lib mojo/probe.mojo -o mojo/build/libnvpost.so
-
-      - name: Which import path worked
-        run: |
-          echo "std.memory: ${{ steps.v1.outcome }}"
-          echo "memory:     ${{ steps.v2.outcome }}"
-          ls -la mojo/build/ || echo "no artifact"
-
-      - name: Inspect the artifact
-        if: hashFiles('backend/mojo/build/libnvpost.so') != ''
-        run: |
-          file mojo/build/libnvpost.so
+          SO="mojo/build/lib_${WINNER}.so"
+          file "$SO"
           echo "--- exported symbols ---"
-          nm -D mojo/build/libnvpost.so | grep -E "nv_decode_nms|nv_abi_version" || echo "NO C SYMBOLS EXPORTED"
+          nm -D "$SO" | grep -E "nv_decode_nms|nv_abi_version" || echo "NO C SYMBOLS"
           echo "--- runtime dependencies ---"
-          ldd mojo/build/libnvpost.so
-
-      - name: Can ctypes load it outside the pixi env
-        if: hashFiles('backend/mojo/build/libnvpost.so') != ''
-        continue-on-error: true
-        run: |
+          ldd "$SO"
+          echo "--- ctypes from system python ---"
           python3 -c "
-          import ctypes
-          lib = ctypes.CDLL('mojo/build/libnvpost.so')
+          import ctypes, os
+          lib = ctypes.CDLL(os.environ['SO'])
           lib.nv_abi_version.restype = ctypes.c_int32
           print('nv_abi_version() ->', lib.nv_abi_version())
           "
+        env:
+          SO: mojo/build/lib_${{ env.WINNER }}.so
 
       - uses: actions/upload-artifact@v4
         if: always()
