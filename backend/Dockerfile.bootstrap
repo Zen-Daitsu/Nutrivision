@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1.7
+FROM python:3.12-slim AS exporter
+RUN pip install --no-cache-dir torch==2.5.1 torchvision==0.20.1 \
+      --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir ultralytics==8.3.55 onnx==1.17.0 onnxslim==0.1.42 onnxruntime==1.20.1
+WORKDIR /export
+RUN <<'PY' python3
+import json
+from ultralytics import YOLO
+m = YOLO("yolov8n-seg.pt")
+m.export(format="onnx", imgsz=640, opset=17, simplify=True, dynamic=False)
+json.dump([m.names[i] for i in sorted(m.names)], open("yolov8n-seg.classes.json", "w"))
+PY
+
+FROM python:3.12-slim AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libgl1 libglib2.0-0 curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srv
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app/ ./app/
+COPY data/ ./data/
+COPY --from=exporter /export/yolov8n-seg.onnx         ./models/yolov8n-seg.onnx
+COPY --from=exporter /export/yolov8n-seg.classes.json ./models/yolov8n-seg.classes.json
+
+RUN useradd -r -u 10001 nutrivision && chown -R nutrivision /srv
+USER nutrivision
+
+ENV NV_MODEL_PATH=/srv/models/yolov8n-seg.onnx \
+    NV_MOJO_ENABLED=0 \
+    NV_ORT_INTRA_THREADS=2
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD curl -fsS http://localhost:8000/healthz || exit 1
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
