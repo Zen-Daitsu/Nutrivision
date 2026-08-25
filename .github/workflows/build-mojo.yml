@@ -18,29 +18,34 @@ jobs:
           locked: false
           cache: false
 
-      - name: Prepare a library-only copy of the kernel
+      - name: Confirm the checked-out source
         run: |
-          mkdir -p mojo/gen mojo/build
-          # A shared library cannot contain main(), so drop it from the copy.
-          sed '/^fn main():/,$d; /^def main():/,$d' mojo/postprocess.mojo > mojo/gen/kernel.mojo
-          echo "--- tail of prepared source ---"
-          tail -5 mojo/gen/kernel.mojo
+          echo "commit: $(git rev-parse --short HEAD)"
+          cat mojo/probe.mojo
 
-      - name: Auto-migrate to Mojo 1.0 and build
-        id: build
+      - name: Build with std.memory import
+        id: v1
         continue-on-error: true
         run: |
-          pixi run mojo build --emit shared-lib --experimental-fixit \
-            mojo/gen/kernel.mojo -o mojo/build/libnvpost.so
+          mkdir -p mojo/build
+          pixi run mojo build --emit shared-lib mojo/probe.mojo -o mojo/build/libnvpost.so
 
-      - name: Show the migrated source
-        if: always()
+      - name: Retry with bare memory import
+        id: v2
+        if: steps.v1.outcome == 'failure'
+        continue-on-error: true
         run: |
-          echo "=============== MIGRATED kernel.mojo ==============="
-          cat mojo/gen/kernel.mojo
+          sed -i 's/^from std\.memory import/from memory import/' mojo/probe.mojo
+          pixi run mojo build --emit shared-lib mojo/probe.mojo -o mojo/build/libnvpost.so
+
+      - name: Which import path worked
+        run: |
+          echo "std.memory: ${{ steps.v1.outcome }}"
+          echo "memory:     ${{ steps.v2.outcome }}"
+          ls -la mojo/build/ || echo "no artifact"
 
       - name: Inspect the artifact
-        if: steps.build.outcome == 'success'
+        if: hashFiles('backend/mojo/build/libnvpost.so') != ''
         run: |
           file mojo/build/libnvpost.so
           echo "--- exported symbols ---"
@@ -49,7 +54,7 @@ jobs:
           ldd mojo/build/libnvpost.so
 
       - name: Can ctypes load it outside the pixi env
-        if: steps.build.outcome == 'success'
+        if: hashFiles('backend/mojo/build/libnvpost.so') != ''
         continue-on-error: true
         run: |
           python3 -c "
@@ -63,7 +68,5 @@ jobs:
         if: always()
         with:
           name: mojo-kernel
-          path: |
-            backend/mojo/build/
-            backend/mojo/gen/
+          path: backend/mojo/build/
           if-no-files-found: ignore
