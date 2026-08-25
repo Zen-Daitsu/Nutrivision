@@ -1,58 +1,89 @@
-import React from 'react';
-import { ScrollView, View, Text, TouchableOpacity } from 'react-native'; // Nettoyé
+import React, { useMemo } from 'react';
+import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
 import { Header } from '../components/Header';
 import { MacroSummary } from '../components/MacroSummary';
 import { MealCard } from '../components/MealCard';
-import { QuickTipCard } from '../components/QuickTipCard';
+import { useAnalysisHistory, usePreferences } from '../providers/AppProviders';
+import type { Macros } from '../types/inference';
+
+const EMPTY_MACROS: Macros = { calories: 0, protein: 0, carbs: 0, fat: 0 };
 
 export default function Dashboard() {
+  const { records, loading } = useAnalysisHistory();
+  const { preferences } = usePreferences();
+  const todayRecords = useMemo(() => {
+    const today = new Date().toDateString();
+    return records.filter((record) => new Date(record.createdAt).toDateString() === today);
+  }, [records]);
+  const consumed = useMemo(
+    () =>
+      todayRecords.reduce<Macros>(
+        (sum, record) => ({
+          calories: sum.calories + record.response.totals.calories,
+          protein: sum.protein + record.response.totals.protein,
+          carbs: sum.carbs + record.response.totals.carbs,
+          fat: sum.fat + record.response.totals.fat,
+        }),
+        EMPTY_MACROS,
+      ),
+    [todayRecords],
+  );
+
   return (
     <SafeAreaView className="flex-1 bg-background" edges={['top']}>
       <Header />
-      
-      <ScrollView 
+      <ScrollView
         className="flex-1 px-margin-mobile"
         contentContainerStyle={{ paddingBottom: 100 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Résumé d'aujourd'hui */}
-        <MacroSummary />
+        <MacroSummary consumed={consumed} goals={preferences} />
 
-        {/* CORRECTION : Remplacement du <div> par un <View> natif */}
-        <View className="flex-row justify-between items-center mt-lg mb-sm">
-          <Text className="text-headline-sm font-bold text-on-surface">Dernières Analyses</Text>
-          <TouchableOpacity>
-            <Text className="text-primary font-semibold text-label-md">Voir tout</Text>
-          </TouchableOpacity>
+        <View className="mb-sm mt-lg flex-row items-center justify-between">
+          <Text className="text-headline-sm font-bold text-on-surface">Analyses récentes</Text>
+          <View className="rounded-full bg-primary/10 px-3 py-1">
+            <Text className="text-xs font-bold text-primary">{records.length} enregistrée{records.length > 1 ? 's' : ''}</Text>
+          </View>
         </View>
 
-        {/* Liste des repas */}
-        <View className="space-y-sm">
-          <MealCard 
-            title="Toast Avocat & Œuf" 
-            calories={420} 
-            period="Matin" 
-            time="Il y a 2h"
-            tags={["Vegan (Alt)", "Haute Protéine"]}
-            imageUri="https://lh3.googleusercontent.com/aida-public/AB6AXuDqO1xQeYtRGG6mX-byUyFGMoYMu-yLUZrjyBAHmrzQToJ_wjzTfNwTQX_yuh05mcy53ksojnB6yYVqCHCYQ4gpLQYxt4-vMeYG7bT0IT9Tvi1lHRGSOoomqzurqTewE4FZY6x30q5veDTFOQSZVwKJ5938gIlhSSjmxFhV0h-EYRMC9Ojd2WREyqSdLak81DrTHQ1P1ft0sz3yjWypPQ91FOUsa2ua5WywHbBuVaRToj5ikKRJKfTTd6sD7FyvS1GY7g90l_2Th8Q"
-          />
-        </View>
+        {loading ? (
+          <ActivityIndicator className="my-lg" color="#006c49" />
+        ) : records.length === 0 ? (
+          <View className="items-center rounded-2xl border border-outline-variant/30 bg-surface-container-lowest p-md">
+            <MaterialIcons name="photo-camera" size={36} color="#006c49" />
+            <Text className="mt-3 text-center text-lg font-bold text-on-surface">Votre journal est vide</Text>
+            <Text className="mt-2 text-center text-sm text-on-surface-variant">
+              Photographiez un repas pour créer votre première analyse réelle.
+            </Text>
+            <TouchableOpacity className="mt-5 rounded-xl bg-primary px-6 py-3" onPress={() => router.push('/analyze')}>
+              <Text className="font-bold text-white">Analyser un repas</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View className="gap-3">
+            {records.slice(0, 10).map((record) => (
+              <MealCard key={record.id} record={record} />
+            ))}
+          </View>
+        )}
 
-        {/* Quick Tips Bento Grid */}
         <View className="mt-lg flex-row gap-sm">
-          <QuickTipCard 
-            title="Hydratation" 
-            value="1.2L / 2L" 
-            icon="water_drop" 
-            variant="high"
-          />
-          <QuickTipCard 
-            title="Énergie" 
-            value="Optimale" 
-            icon="bolt" 
-            variant="fixed"
-          />
+          <View className="flex-1 rounded-xl bg-primary p-sm">
+            <MaterialIcons name="today" size={22} color="#ffffff" />
+            <Text className="mt-3 text-xs text-white/70">Analyses aujourd’hui</Text>
+            <Text className="text-2xl font-bold text-white">{todayRecords.length}</Text>
+          </View>
+          <View className="flex-1 rounded-xl bg-surface-container p-sm">
+            <MaterialIcons name="speed" size={22} color="#006c49" />
+            <Text className="mt-3 text-xs text-on-surface-variant">Dernière inférence</Text>
+            <Text className="text-xl font-bold text-on-surface">
+              {records[0] ? `${Math.round(records[0].response.inference_ms)} ms` : '—'}
+            </Text>
+          </View>
         </View>
       </ScrollView>
     </SafeAreaView>

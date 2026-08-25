@@ -1,62 +1,56 @@
-// src/components/MacroSummary.tsx
 import React from 'react';
-import { View, Text } from 'react-native';
-export function MacroSummary() {
-  const caloriesConsumed = 1450;
-  const caloriesTarget = 2200;
-  const remaining = caloriesTarget - caloriesConsumed;
+import { Text, View } from 'react-native';
 
+import type { Macros } from '../types/inference';
+import type { NutritionPreferences } from '../types/preferences';
+
+interface MacroSummaryProps {
+  consumed: Macros;
+  goals: NutritionPreferences;
+}
+
+function percent(value: number, target: number): `${number}%` {
+  return `${Math.min(100, Math.max(0, (value / Math.max(target, 1)) * 100))}%`;
+}
+
+export function MacroSummary({ consumed, goals }: MacroSummaryProps) {
+  const remaining = Math.max(0, goals.calorieTarget - consumed.calories);
   return (
-    <View className="bg-surface-container-lowest rounded-xl p-sm border border-outline-variant/20 shadow-sm mt-md">
-      <View className="flex-row items-center justify-between">
-        {/* Cercle de Progression Gauche */}
-        <View className="w-1/2 items-center justify-center relative">
-          <View className="w-32 h-32 rounded-full border-[10px] border-surface-container-high items-center justify-center">
-            <View className="absolute inset-0 rounded-full border-[10px] border-primary border-r-transparent border-b-transparent rotate-45" />
-            <Text className="text-on-surface text-center font-bold text-2xl">
-              {remaining}
-            </Text>
-            <Text className="text-[10px] uppercase tracking-wider text-on-surface-variant font-semibold">
-              kcal restants
-            </Text>
-          </View>
+    <View className="mt-md rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-sm shadow-sm">
+      <Text className="text-xs font-bold uppercase tracking-widest text-primary">
+        Aujourd’hui
+      </Text>
+      <View className="mt-3 flex-row items-center justify-between">
+        <View className="w-2/5 items-center">
+          <Text className="text-3xl font-bold text-on-surface">{Math.round(remaining)}</Text>
+          <Text className="text-[10px] font-semibold uppercase tracking-wider text-on-surface-variant">
+            kcal restantes
+          </Text>
+          <Text className="mt-1 text-xs text-on-surface-variant">
+            {Math.round(consumed.calories)} / {goals.calorieTarget}
+          </Text>
         </View>
-
-        {/* Liste des Macros à Droite */}
-        <View className="w-1/2 pl-4 space-y-3">
-          {/* Protéines */}
-          <View>
-            <View className="flex-row justify-between mb-1">
-              <Text className="text-xs font-bold text-on-surface">Protéines</Text>
-              <Text className="text-xs text-on-surface-variant">95g / 140g</Text>
-            </View>
-            <View className="h-2 w-full bg-surface-container-high rounded-full overflow-hidden">
-              <View className="h-full bg-primary rounded-full" style={{ width: '67%' }} />
-            </View>
-          </View>
-
-          {/* Glucides */}
-          <View>
-            <View className="flex-row justify-between mb-1">
-              <Text className="text-xs font-bold text-on-surface">Glucides</Text>
-              <Text className="text-xs text-on-surface-variant">45g / 50g</Text>
-            </View>
-            <View className="h-2 w-full bg-surface-container-high rounded-full overflow-hidden">
-              <View className="h-full bg-secondary-container rounded-full" style={{ width: '90%' }} />
-            </View>
-          </View>
-
-          {/* Lipides */}
-          <View>
-            <View className="flex-row justify-between mb-1">
-              <Text className="text-xs font-bold text-on-surface">Lipides</Text>
-              <Text className="text-xs text-on-surface-variant">70g / 90g</Text>
-            </View>
-            <View className="h-2 w-full bg-surface-container-high rounded-full overflow-hidden">
-              <View className="h-full bg-tertiary rounded-full" style={{ width: '77%' }} />
-            </View>
-          </View>
+        <View className="w-3/5 gap-3 pl-4">
+          <MacroProgress label="Protéines" value={consumed.protein} target={goals.proteinTarget} color="#006c49" />
+          <MacroProgress label="Glucides" value={consumed.carbs} target={goals.carbsTarget} color="#fd761a" />
+          <MacroProgress label="Lipides" value={consumed.fat} target={goals.fatTarget} color="#5d5f5f" />
         </View>
+      </View>
+    </View>
+  );
+}
+
+function MacroProgress({ label, value, target, color }: { label: string; value: number; target: number; color: string }) {
+  return (
+    <View>
+      <View className="mb-1 flex-row justify-between">
+        <Text className="text-xs font-bold text-on-surface">{label}</Text>
+        <Text className="text-xs text-on-surface-variant">
+          {Math.round(value)} g / {target} g
+        </Text>
+      </View>
+      <View className="h-2 w-full overflow-hidden rounded-full bg-surface-container-high">
+        <View className="h-full rounded-full" style={{ width: percent(value, target), backgroundColor: color }} />
       </View>
     </View>
   );

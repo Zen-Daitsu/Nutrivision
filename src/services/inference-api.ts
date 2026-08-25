@@ -1,10 +1,15 @@
 import type {
   AnalysisImage,
-  DetectionResult,
+  AnalysisResponse,
+  DetectedItem,
+  HealthResponse,
+  Macros,
 } from '../types/inference';
 
-const INFERENCE_PATH = '/api/v1/inference';
-const REQUEST_TIMEOUT_MS = 30_000;
+const ANALYSIS_PATH = '/api/v1/analyze';
+const HEALTH_PATH = '/healthz';
+const ANALYSIS_TIMEOUT_MS = 20_000;
+const HEALTH_TIMEOUT_MS = 5_000;
 
 export class InferenceApiError extends Error {
   constructor(
@@ -34,118 +39,182 @@ function getApiBaseUrl() {
   return configuredUrl.replace(/\/+$/, '');
 }
 
-function inferMimeType(image: AnalysisImage) {
-  if (image.mimeType) {
-    return image.mimeType;
-  }
-
-  const extension = image.uri.split('.').pop()?.toLowerCase();
-  if (extension === 'png') {
-    return 'image/png';
-  }
-  if (extension === 'webp') {
-    return 'image/webp';
-  }
-  return 'image/jpeg';
-}
-
-function createFileName(image: AnalysisImage, mimeType: string) {
-  if (image.fileName) {
-    return image.fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-  }
-
-  const extension =
-    mimeType === 'image/png'
-      ? 'png'
-      : mimeType === 'image/webp'
-        ? 'webp'
-        : 'jpg';
-  return `meal-${Date.now()}.${extension}`;
-}
-
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function isDetectionResult(value: unknown): value is DetectionResult {
+function isMacros(value: unknown): value is Macros {
   if (!value || typeof value !== 'object') {
     return false;
   }
-
-  const detection = value as Record<string, unknown>;
-  const macros = detection.estimated_macros;
-
+  const macros = value as Record<string, unknown>;
   return (
-    Number.isInteger(detection.class_id) &&
-    typeof detection.name === 'string' &&
-    isFiniteNumber(detection.confidence) &&
-    Array.isArray(detection.box_coordinates) &&
-    detection.box_coordinates.every(isFiniteNumber) &&
-    Boolean(macros) &&
-    typeof macros === 'object' &&
-    isFiniteNumber((macros as Record<string, unknown>).protein) &&
-    isFiniteNumber((macros as Record<string, unknown>).carbs) &&
-    isFiniteNumber((macros as Record<string, unknown>).fat) &&
-    isFiniteNumber((macros as Record<string, unknown>).calories)
+    isFiniteNumber(macros.protein) &&
+    isFiniteNumber(macros.carbs) &&
+    isFiniteNumber(macros.fat) &&
+    isFiniteNumber(macros.calories)
   );
+}
+
+function isDetectedItem(value: unknown): value is DetectedItem {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const item = value as Record<string, unknown>;
+  return (
+    Number.isInteger(item.class_id) &&
+    typeof item.name === 'string' &&
+    isFiniteNumber(item.confidence) &&
+    Array.isArray(item.box_xyxy) &&
+    item.box_xyxy.length === 4 &&
+    item.box_xyxy.every(isFiniteNumber) &&
+    isFiniteNumber(item.mask_area_px) &&
+    isFiniteNumber(item.mass_g) &&
+    (item.mass_confidence === 'high' ||
+      item.mass_confidence === 'medium' ||
+      item.mass_confidence === 'low') &&
+    isMacros(item.macros) &&
+    (item.fdc_id === null || Number.isInteger(item.fdc_id))
+  );
+}
+
+export function isAnalysisResponse(value: unknown): value is AnalysisResponse {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const response = value as Record<string, unknown>;
+  return (
+    Array.isArray(response.items) &&
+    response.items.every(isDetectedItem) &&
+    isMacros(response.totals) &&
+    isFiniteNumber(response.inference_ms) &&
+    isFiniteNumber(response.postprocess_ms) &&
+    typeof response.source === 'string' &&
+    (response.scale_px_per_mm === null ||
+      isFiniteNumber(response.scale_px_per_mm))
+  );
+}
+
+function messageForStatus(status: number, detail?: string) {
+  if (status === 413) {
+    return 'L’image dépasse la limite de 8 Mo du serveur.';
+  }
+  if (status === 415) {
+    return 'Format d’image non pris en charge. Utilisez une image JPEG, PNG ou WebP.';
+  }
+  if (status === 429) {
+    return 'Le service reçoit trop de demandes. Réessayez dans quelques instants.';
+  }
+  return detail || `Le serveur a retourné l’erreur ${status}.`;
+}
+
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function sendAnalysis(
+  image: AnalysisImage,
+  referenceWidthMm?: number,
+) {
+  const formData = new FormData();
+  formData.append(
+    'file',
+    {
+      uri: image.uri,
+      name: image.fileName || `meal-${Date.now()}.jpg`,
+      type: 'image/jpeg',
+    } as unknown as Blob,
+  );
+
+  if (referenceWidthMm && referenceWidthMm > 0) {
+    formData.append('reference_width_mm', String(referenceWidthMm));
+  }
+
+  const response = await fetchWithTimeout(
+    `${getApiBaseUrl()}${ANALYSIS_PATH}`,
+    { method: 'POST', body: formData },
+    ANALYSIS_TIMEOUT_MS,
+  );
+  const payload: unknown = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const detail =
+      payload &&
+      typeof payload === 'object' &&
+      'detail' in payload &&
+      typeof payload.detail === 'string'
+        ? payload.detail
+        : undefined;
+    throw new InferenceApiError(
+      messageForStatus(response.status, detail),
+      response.status,
+    );
+  }
+
+  if (!isAnalysisResponse(payload)) {
+    throw new InferenceApiError(
+      'La réponse du serveur ne respecte pas le format attendu.',
+    );
+  }
+  return payload;
 }
 
 export async function analyzePlateImage(
   image: AnalysisImage,
-): Promise<DetectionResult[]> {
-  const mimeType = inferMimeType(image);
-  const formData = new FormData();
-  const upload = {
-    uri: image.uri,
-    name: createFileName(image, mimeType),
-    type: mimeType,
-  };
+  referenceWidthMm?: number,
+): Promise<AnalysisResponse> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await sendAnalysis(image, referenceWidthMm);
+    } catch (error) {
+      if (error instanceof InferenceApiError) {
+        throw error;
+      }
+      const timedOut = error instanceof Error && error.name === 'AbortError';
+      if (attempt === 1) {
+        throw new InferenceApiError(
+          timedOut
+            ? 'Le serveur met trop de temps à répondre. Réessayez dans quelques instants.'
+            : 'Impossible de joindre le serveur NutriVision. Vérifiez son adresse et votre connexion réseau.',
+        );
+      }
+    }
+  }
+  throw new InferenceApiError('Impossible de lancer l’analyse.');
+}
 
-  formData.append('file', upload as unknown as Blob);
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
+export async function checkApiHealth(): Promise<HealthResponse> {
   try {
-    const response = await fetch(`${getApiBaseUrl()}${INFERENCE_PATH}`, {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal,
-    });
-
+    const response = await fetchWithTimeout(
+      `${getApiBaseUrl()}${HEALTH_PATH}`,
+      { method: 'GET' },
+      HEALTH_TIMEOUT_MS,
+    );
     const payload: unknown = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      const detail =
-        payload &&
-        typeof payload === 'object' &&
-        'detail' in payload &&
-        typeof payload.detail === 'string'
-          ? payload.detail
-          : `Le serveur a retourné l’erreur ${response.status}.`;
-      throw new InferenceApiError(detail, response.status);
+    if (
+      !response.ok ||
+      !payload ||
+      typeof payload !== 'object' ||
+      !('status' in payload) ||
+      typeof payload.status !== 'string'
+    ) {
+      throw new InferenceApiError('Le service d’analyse est indisponible.');
     }
-
-    if (!Array.isArray(payload) || !payload.every(isDetectionResult)) {
-      throw new InferenceApiError(
-        'La réponse du serveur ne respecte pas le format attendu.',
-      );
-    }
-
-    return payload;
+    return payload as HealthResponse;
   } catch (error) {
     if (error instanceof InferenceApiError) {
       throw error;
     }
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new InferenceApiError(
-        'Le serveur met trop de temps à répondre. Réessayez dans quelques instants.',
-      );
-    }
-    throw new InferenceApiError(
-      'Impossible de joindre le serveur NutriVision. Vérifiez son adresse et votre connexion réseau.',
-    );
-  } finally {
-    clearTimeout(timeout);
+    throw new InferenceApiError('Le service d’analyse est indisponible.');
   }
 }
