@@ -16,7 +16,7 @@ jobs:
         with:
           manifest-path: backend/pixi.toml
           locked: false
-          cache: true
+          cache: false
 
       - name: Toolchain versions
         run: |
