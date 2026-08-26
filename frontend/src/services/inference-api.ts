@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import type {
   AnalysisImage,
   AnalysisResponse,
@@ -127,14 +128,24 @@ async function sendAnalysis(
   referenceWidthMm?: number,
 ) {
   const formData = new FormData();
-  formData.append(
-    'file',
-    {
-      uri: image.uri,
-      name: image.fileName || `meal-${Date.now()}.jpg`,
-      type: 'image/jpeg',
-    } as unknown as Blob,
-  );
+  const fileName = image.fileName || `meal-${Date.now()}.jpg`;
+
+  if (Platform.OS === 'web') {
+    // Browsers require a real Blob. The React Native { uri, name, type } shape
+    // serialises to "[object Object]" and the server receives no file at all.
+    const raw = await (await fetch(image.uri)).blob();
+    const blob = raw.type ? raw : new Blob([raw], { type: 'image/jpeg' });
+    formData.append('file', blob, fileName);
+  } else {
+    formData.append(
+      'file',
+      {
+        uri: image.uri,
+        name: fileName,
+        type: 'image/jpeg',
+      } as unknown as Blob,
+    );
+  }
 
   if (referenceWidthMm && referenceWidthMm > 0) {
     formData.append('reference_width_mm', String(referenceWidthMm));
