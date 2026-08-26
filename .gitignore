@@ -3,3 +3,12 @@ my_dataset/
 .dvc/cache/
 .dvc/tmp/
 .dvc/local/
+
+# Expo / Node
+node_modules/
+.expo/
+dist/
+web-build/
+*.tsbuildinfo
+frontend/.env
+frontend/.env.local
