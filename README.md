@@ -14,7 +14,7 @@ and a GitHub Actions pipeline that deploys both to AWS without a single stored c
 | **Course** | A61 · Collège Bois de Boulogne |
 | **Authors** | Ismail Boufaress · Mohamed El Amine Kraiem · Cédric Ribassin |
 
-> **Language** · English (this document) · **[Français](README.fr.md)**
+> **Language** · English (this document) · **[Français](README.fr)**
 
 ---
 
