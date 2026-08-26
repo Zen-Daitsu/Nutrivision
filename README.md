@@ -7,7 +7,6 @@ Point a phone camera at a plate. Get protein, carbohydrates, fat and calories.
 A Progressive Web App backed by a YOLOv8 segmentation model served over ONNX Runtime, deployed on AWS through a GitHub Actions pipeline with no long-lived credentials.
 
 | | |
-|---|---|
 | **Live demo** | `https://main.d2dz9pix11gtly.amplifyapp.com` |
 | **API health** | `https://<service>.ca-central-1.cs.amazonlightsail.com/healthz` |
 | **Region** | `ca-central-1` — Montréal |
