@@ -1,6 +1,6 @@
 # NutriVision
 
-**[English](README.md) · [Français](Readme.fr.md)**
+**[English](README.md) · [Français](README.fr.md)**
 
 Point a phone camera at a plate. Get protein, carbohydrates, fat and calories.
 
