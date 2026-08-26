@@ -1,33 +1,43 @@
+# AWS Amplify Hosting build specification — Expo web export
+#
+# The Expo client targets web through react-native-web. `expo export --platform
+# web` produces a static bundle in frontend/dist, which Amplify serves directly.
+#
+# The API endpoint reaches the bundle through EXPO_PUBLIC_API_URL. Expo inlines
+# any EXPO_PUBLIC_* variable at build time, so it must be present in the Amplify
+# environment before the export runs -- it cannot be injected afterwards.
 version: 1
 frontend:
   phases:
+    preBuild:
+      commands:
+        - cd frontend
+        - npm ci
     build:
       commands:
-        - echo "Static PWA, nothing to compile"
-        - printf "window.__NUTRIVISION_API__ = '%s';\n" "$API_BASE_URL" > frontend/js/config.js
-        - cat frontend/js/config.js
+        - test -n "$EXPO_PUBLIC_API_URL" || (echo "EXPO_PUBLIC_API_URL is unset" && exit 1)
+        - echo "building against $EXPO_PUBLIC_API_URL"
+        - npx expo export --platform web --output-dir dist
   artifacts:
-    baseDirectory: frontend
+    baseDirectory: frontend/dist
     files:
       - '**/*'
   cache:
-    paths: []
+    paths:
+      - frontend/node_modules/**/*
 
 customHeaders:
-  - pattern: '/index.html'
+  # Expo emits content-hashed asset filenames, so the bundle is immutable.
+  # HTML entry points must never be cached, or an installed client keeps running
+  # last week's bundle against this week's API.
+  - pattern: '**/*.html'
     headers:
       - key: 'Cache-Control'
         value: 'no-cache, must-revalidate'
-  - pattern: '/sw.js'
+  - pattern: '/_expo/static/**'
     headers:
       - key: 'Cache-Control'
-        value: 'no-cache, must-revalidate'
-      - key: 'Service-Worker-Allowed'
-        value: '/'
-  - pattern: '/js/config.js'
-    headers:
-      - key: 'Cache-Control'
-        value: 'no-cache, must-revalidate'
+        value: 'public, max-age=31536000, immutable'
   - pattern: '/**'
     headers:
       - key: 'Permissions-Policy'
@@ -36,3 +46,5 @@ customHeaders:
         value: 'nosniff'
       - key: 'Referrer-Policy'
         value: 'strict-origin-when-cross-origin'
+      - key: 'Strict-Transport-Security'
+        value: 'max-age=31536000; includeSubDomains'
