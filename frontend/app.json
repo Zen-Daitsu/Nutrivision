@@ -32,6 +32,20 @@
         "NSPhotoLibraryUsageDescription": "NutriVision accède à vos photos pour analyser une image de repas."
       }
     },
+    "android": {
+      "package": "com.zendaitsu.nutrivision",
+      "permissions": ["CAMERA"]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "name": "NutriVision",
+      "shortName": "NutriVision",
+      "themeColor": "#0B1013",
+      "backgroundColor": "#0B1013",
+      "display": "standalone",
+      "orientation": "portrait"
+    },
     "experiments": {
       "typedRoutes": true
     }
